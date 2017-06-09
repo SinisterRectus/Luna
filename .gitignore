@@ -1,7 +1,6 @@
-*
-!.gitignore
-!LISENCE
-!modules
-!luna.lua
-!avatar.lua
-!Database.lua
+deps
+luvit
+luvi
+lit
+token.dat
+voice.lua
