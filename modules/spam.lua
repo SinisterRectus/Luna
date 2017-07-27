@@ -41,10 +41,6 @@ local function caret(msg)
 	end
 end
 
--- local function kek(msg)
--- 	return msg.content:gsub('%W', ''):lower():find('k[aeiou1-9]+k')
--- end
-
 return function(msg)
 	if not channels[msg.channel.id] then return end
 	return caret(msg) or star(msg)

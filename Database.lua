@@ -136,16 +136,13 @@ function Database:startEventHandlers()
 	self:startDeleteHandler()
 end
 
-local log = io.open('database.log', 'a')
-
 function Database:startCreateHandler()
 	self.client:on('messageCreate', function(msg)
 		local stmt = self.stmts[msg.channel.id]
 		if not stmt then return end
-		if not pcall(function() return stmt.create:reset():bind(msg.id, msg.author.id, msg.content):step() end) then
-			log:write('messageCreate: ', msg.id, '\n')
-			log:flush()
-		end
+		return pcall(function()
+			return stmt.create:reset():bind(msg.id, msg.author.id, msg.content):step()
+		end)
 	end)
 end
 
@@ -153,20 +150,18 @@ function Database:startUpdateHandler()
 	self.client:on('messageUpdate', function(msg)
 		local stmt = self.stmts[msg.channel.id]
 		if not stmt then return end
-		if not pcall(function() return stmt.update:reset():bind(msg.content, msg.id):step() end) then
-			log:write('messageUpdate: ', msg.id, '\n')
-			log:flush()
-		end
+		return pcall(function()
+			return stmt.update:reset():bind(msg.content, msg.id):step()
+		end)
 	end)
 	self.client:on('messageUpdateUncached', function(channel, id)
 		local stmt = self.stmts[channel.id]
 		if not stmt then return end
 		local msg = channel:getMessage(id)
 		if not msg then return end
-		if not pcall(function() return stmt.update:reset():bind(msg.content, msg.id):step() end) then
-			log:write('messageUpdateUncached: ', id, '\n')
-			log:flush()
-		end
+		return pcall(function()
+			return stmt.update:reset():bind(msg.content, msg.id):step()
+		end)
 	end)
 end
 
@@ -174,18 +169,16 @@ function Database:startDeleteHandler()
 	self.client:on('messageDelete', function(msg)
 		local stmt = self.stmts[msg.channel.id]
 		if not stmt then return end
-		if not pcall(function() return stmt.delete:reset():bind(msg.id):step() end) then
-			log:write('messageDelete: ', msg.id, '\n')
-			log:flush()
-		end
+		return pcall(function()
+			return stmt.delete:reset():bind(msg.id):step()
+		end)
 	end)
 	self.client:on('messageDeleteUncached', function(channel, id)
 		local stmt = self.stmts[channel.id]
 		if not stmt then return end
-		if not pcall(function() return stmt.delete:reset():bind(id):step() end) then
-			log:write('messageDeleteUncached: ', id, '\n')
-			log:flush()
-		end
+		return pcall(function()
+			return stmt.delete:reset():bind(id):step()
+		end)
 	end)
 end
 

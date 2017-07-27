@@ -6,9 +6,10 @@ local timer = require('timer')
 local http = require('coro-http')
 
 local date, time = os.date, os.time
-local clamp, random, max = math.clamp, math.random, math.max
+local clamp, random, max, round = math.clamp, math.random, math.max, math.round
 local f, upper = string.format, string.upper
 local insert, concat, sort = table.insert, table.concat, table.sort
+local pack = table.pack
 local keys = table.keys
 local dump = pp.dump
 local decode = json.decode
@@ -21,6 +22,7 @@ local url2 = "http://api.usno.navy.mil/moon/phase?date=today&nump=4&ID=Discord"
 
 local dateString1 = '!%Y-%m-%d %H:%M:%S'
 local dateString2 = '!%Y-%m-%dT%H:%M:%S'
+local ZWSP = '\226\128\139'
 
 local function code(str)
 	return f('```\n%s```', str)
@@ -195,7 +197,7 @@ cmds['sun'] = function(_, msg) -- should probably cache these responses
 					{name = 'Upper Transit', value = tostring(sundata.U), inline = true},
 					{name = 'Sunset', value = tostring(sundata.S), inline = true},
 					{name = 'Twilight End', value = tostring(sundata.EC), inline = true},
-					{name = '\0', value = '\0', inline = true},
+					{name = ZWSP, value = ZWSP, inline = true},
 				},
 				footer = {text = f('%s, %s', data.city, data.state)},
 				timestamp = date(dateString2, time()),
@@ -241,7 +243,7 @@ cmds['moon'] = function(_, msg) -- should probably cache these responses
 					{name = tostring(phase2.phase), value = tostring(phase2.date), inline = true},
 					{name = tostring(phase3.phase), value = tostring(phase3.date), inline = true},
 					{name = tostring(phase4.phase), value = tostring(phase4.date), inline = true},
-					{name = '\0', value = '\0', inline = true},
+					{name = ZWSP, value = ZWSP, inline = true},
 				},
 				footer = {text = f('%s, %s', data1.city, data1.state)},
 				timestamp = date(dateString2, time()),
@@ -399,7 +401,7 @@ end
 local function prettyLine(...)
 	local ret = {}
 	for i = 1, select('#', ...) do
-		insert(ret, dump(select(i, ...), false, true))
+		insert(ret, dump(select(i, ...), nil, true))
 	end
 	return concat(ret, '\t')
 end
@@ -416,11 +418,20 @@ local sandbox = setmetatable({
 	discordia = discordia,
 }, {__index = _G})
 
+local function collect(success, ...)
+	return success, pack(...)
+end
+
 cmds['lua'] = function(arg, msg)
 
 	if not arg then return end
 
-	if msg.author ~= msg.client.owner then return msg:reply('```Restricted command```')	end
+	local owner = msg.client.owner
+	if msg.author ~= owner then
+		return msg:reply {
+			content = f('%s only %s may use this command', msg.author.mentionString, owner.mentionString)
+		}
+	end
 
 	arg = arg:gsub('```lua\n?', ''):gsub('```\n?', '')
 
@@ -436,13 +447,72 @@ cmds['lua'] = function(arg, msg)
 	local fn, syntaxError = load(arg, 'Luna', 't', sandbox)
 	if not fn then return handleError(msg, syntaxError) end
 
-	local success, runtimeError = pcall(fn)
-	if not success then return handleError(msg, runtimeError) end
+	local success, res = collect(pcall(fn))
+	if not success then return handleError(msg, res[1]) end
+
+	if res.n > 0 then
+		for i = 1, res.n do
+			res[i] = tostring(res[i])
+		end
+		insert(lines, concat(res, '\t'))
+	end
 
 	local output = concat(lines, '\n')
-
 	if #output > 1990 then
-		return msg:reply(lua(output:sub(1, 1990)))
+		return msg:reply {
+			content = code('Content is too large. See attached file.'),
+			file = {tostring(os.time()) .. '.txt', output}
+		}
+	elseif #output > 0 then
+		return msg:reply(lua(output))
+	end
+
+end
+
+local bf = {
+	["+"] = "t[i] = t[i] + 1 ",
+	["-"] = "t[i] = t[i] - 1 ",
+	[">"] = "i = i + 1 ",
+	["<"] = "i = i - 1 ",
+	["."] = "w(t[i]) ",
+	[","] = "t[i] = r() ",
+	["["] = "while t[i] ~= 0 do ",
+	["]"] = "end ",
+}
+
+cmds['bf'] = function(arg, msg)
+
+	if not arg then return end
+
+	local owner = msg.client.owner
+	if msg.author ~= owner then
+		return msg:reply {
+			content = f('%s only %s may use this command', msg.author.mentionString, owner.mentionString)
+		}
+	end
+
+	arg = arg:gsub('```\n?', '')
+
+	local output = {}
+
+	local fn, syntaxError = loadstring(arg:gsub(".", bf), "brainfuck", "t", {
+		i = 0,
+		t = setmetatable({}, {__index = function() return 0 end}),
+		r = function() return io.read(1):byte() end,
+		w = function(c) insert(output, string.char(c)) end
+	})
+
+	if not fn then return handleError(msg, syntaxError) end
+
+	local success, res = collect(pcall(fn))
+	if not success then return handleError(msg, res[1]) end
+
+	output = concat(output)
+	if #output > 1990 then
+		return msg:reply {
+			content = code('Content is too large. See attached file.'),
+			file = {os.time() .. '.txt', output}
+		}
 	elseif #output > 0 then
 		return msg:reply(lua(output))
 	end
@@ -490,6 +560,8 @@ end
 local limit = 15
 local DISCORDIA = '173885235002474497'
 
+-- TODO: restrict these to discordia channel
+
 cmds['top'] = function(_, msg)
 
 	local fields = {}
@@ -521,13 +593,13 @@ cmds['chars'] = function(_, msg)
 	local fields = {}
 	local db = msg.client.db
 	local athCount = db:getAuthorCount(DISCORDIA)
-	local charCount = db:getCharacterCount(DISCORDIA)
+	local chrCount = db:getCharacterCount(DISCORDIA)
 
 	for res in db:getTopAuthorsByCharacterCount(DISCORDIA, limit) do
 		local user = msg.client:getUser(res[1])
 		insert(fields, {
 			name = user and user.username or res[1],
-			value = f('%i (%.2f%%)', res[2], 100 * res[2] / charCount),
+			value = f('%i (%.2f%%)', res[2], 100 * res[2] / chrCount),
 			inline = true,
 		})
 	end
@@ -535,8 +607,39 @@ cmds['chars'] = function(_, msg)
 	return msg:reply {
 		embed = {
 			title = 'Top Discordia Channel Authors By Character Count',
-			description = f('Authors: %i | Character: %i', athCount, charCount),
+			description = f('Authors: %i | Character: %i', athCount, chrCount),
 			fields = fields,
+		}
+	}
+
+end
+
+cmds['stats'] = function(_, msg)
+
+	local db = msg.client.db
+	local athCount = db:getAuthorCount(DISCORDIA)
+	local chrCount = db:getCharacterCount(DISCORDIA)
+	local msgCount = db:getMessageCount(DISCORDIA)
+
+	local t = time()
+	local chan = msg.client:getTextChannel(DISCORDIA)
+	local age = round((t - chan.createdAt) / 60 / 60 / 24)
+
+	return msg:reply {
+		embed = {
+			title = 'Discordia Channel Statistics',
+			description = 'Since ' .. date(dateString1, chan.createdAt),
+			fields = {
+				{name = 'Authors', value = athCount, inline = true},
+				{name = 'Messages', value = msgCount, inline = true},
+				{name = 'Characters', value = chrCount, inline = true},
+				{name = 'Channel Age', value = age .. ' days', inline = true},
+				{name = 'Avg Msgs Per Author', value = round(msgCount / athCount), inline = true},
+				{name = 'Avg Chars Per Msg', value = round(chrCount / msgCount), inline = true},
+				{name = 'Avg Chars Per Author', value = round(chrCount / athCount), inline = true},
+				{name = 'Avg Msgs Per Day', value = round(msgCount / age), inline = true},
+				{name = ZWSP, value = ZWSP, inline = true},
+			},
 		}
 	}
 
@@ -551,6 +654,26 @@ cmds['clean'] = function(arg, msg)
 	if msg.author ~= msg.client.owner then return end
 	if not tonumber(arg) then return end
 	return msg.channel:bulkDeleteAfter(arg, 100)
+end
+
+cmds['block'] = function(arg, msg)
+	if msg.author ~= msg.client.owner then return end
+	local member = search(msg.guild, arg)
+	if not member then return end
+	local o = msg.channel:getPermissionOverwriteFor(member)
+	if o and o:denyPermissions('sendMessages') then
+		return msg:reply(code(f('⛔ %s (%s) blocked', member.name, member.id)))
+	end
+end
+
+cmds['unblock'] = function(arg, msg)
+	if msg.author ~= msg.client.owner then return end
+	local member = search(msg.guild, arg)
+	if not member then return end
+	local o = msg.channel:getPermissionOverwriteFor(member)
+	if o and o:clearPermissions('sendMessages') then
+		return msg:reply(code(f('✅ %s (%s) unblocked', member.name, member.id)))
+	end
 end
 
 return cmds
