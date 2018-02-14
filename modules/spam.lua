@@ -1,12 +1,10 @@
-local f = string.format
-
 local channels = {
-	['173885235002474497'] = true, -- DAPI #lua_discordia
+	['381890411414683648'] = true, -- DAPI #lua_discordia
 }
 
-local stars = {}
+local stars = setmetatable({}, {__index = function() return 0 end})
 
-local function star(msg)
+local function star(msg) -- TODO: fix this
 
 	if msg.author.discriminator ~= '0000' then return end
 
@@ -19,19 +17,24 @@ local function star(msg)
 	if not name then return end
 
 	local key = msg.channel.id .. name
-	stars[key] = stars[key] and stars[key] + 1 or 1
+	stars[key] = stars[key] + 1
+
 	if stars[key] > 1 then
 		if stars[key] == 2 then
-			msg.client.owner:sendMessage(f(
+			msg.client.owner:sendf(
 				'Star spam detected at %q (%q) by %q',
 				msg.channel.name,
 				msg.channel.id,
 				name
-			))
+			)
 		end
 		return true
 	end
 
+end
+
+local function dot(msg)
+	return msg.content == '.'
 end
 
 local function caret(msg)
@@ -42,6 +45,7 @@ local function caret(msg)
 end
 
 return function(msg)
-	if not channels[msg.channel.id] then return end
-	return caret(msg) or star(msg)
+	if channels[msg.channel.id] then
+		return dot(msg) or caret(msg) or star(msg)
+	end
 end

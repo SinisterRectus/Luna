@@ -1,291 +1,380 @@
 local sql = require('sqlite3')
+local timer = require('timer')
+local discordia = require('discordia')
 
-local f = string.format
+local class = discordia.class
+local sleep = timer.sleep
 
-local MAX_INT = 2^32
+local format = string.format
+local classes = class.classes
+local isInstance = class.isInstance
 
-local function intToStr(int)
-	return tostring(int):match('%d*')
+local LIMIT = 100
+local DELAY = 2000
+
+local function intstr(n)
+	if tonumber(n) then
+		n = tostring(n):match('%d*')
+		return #n > 0 and n or '0'
+	else
+		return tostring(n)
+	end
+end
+
+local function len(obj)
+	return obj and #obj or 0
+end
+
+local function exec(stmt, ...)
+	return stmt:reset():bind(...):step()
 end
 
 local Database = class('Database')
 
 function Database:__init(name, client)
 
-	local conn = sql.open(name .. '.db')
+	local db = sql.open(name .. '.db')
 
-	conn:exec([[
+	db:exec("PRAGMA foreign_keys = ON")
+
+	-- TODO: create indices
+
+	db:exec [[
 	CREATE TABLE IF NOT EXISTS channels (
-		id INTEGER PRIMARY KEY,
-		name TEXT,
-		guild_id INTEGER,
-		guild_name
-	);
-	]])
+		id       INTEGER PRIMARY KEY,
+		guild_id INTEGER NOT NULL
+	)
+	]]
 
-	self.stmts = {}
-	self.client = client
-	self.conn = conn
+	db:exec [[
+	CREATE TABLE IF NOT EXISTS messages (
+		id          INTEGER PRIMARY KEY,
+		channel_id  INTEGER NOT NULL,
+		author_id   INTEGER NOT NULL,
+		content     INTEGER NOT NULL,
+		embeds      INTEGER NOT NULL,
+		attachments INTEGER NOT NULL,
+		FOREIGN KEY (channel_id) REFERENCES channels(id)
+	)
+	]]
+
+	db:exec [[
+	CREATE TABLE IF NOT EXISTS mentions (
+		user_id    INTEGER NOT NULL,
+		message_id INTEGER NOT NULL,
+		FOREIGN KEY (message_id) REFERENCES messages(id)
+	)
+	]]
+
+	db:exec [[
+	CREATE TABLE IF NOT EXISTS reactions (
+		emoji      INTEGER NOT NULL,
+		user_id    INTEGER NOT NULL,
+		message_id INTEGER NOT NULL,
+		FOREIGN KEY (message_id) REFERENCES messages(id)
+	)
+	]]
+
+	self._db = db
+	self._client = client
+	self._channels = {}
+
+	local stmts = {
+		create = db:prepare("INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?)"),
+		channel = db:prepare("INSERT OR REPLACE INTO channels VALUES (?, ?)"),
+		mention = db:prepare("INSERT INTO mentions VALUES (?, ?)"),
+		reaction = db:prepare("INSERT INTO reactions VALUES (?, ?, ?)"),
+		min = db:prepare("SELECT min(id) FROM messages WHERE channel_id == ?"),
+		max = db:prepare("SELECT max(id) FROM messages WHERE channel_id == ?"),
+		authorCount = db:prepare("SELECT count(DISTINCT author_id) FROM messages WHERE channel_id == ?"),
+		begin = db:prepare("BEGIN"),
+		commit = db:prepare("COMMIT"),
+	}
+
+	local stats = [[
+	SELECT
+		count(id) AS Messages,
+		sum(content) AS Characters,
+		sum(embeds) AS Embeds,
+		sum(attachments) AS Attachments
+	FROM
+		messages WHERE channel_id == ?
+	]]
+
+	local mentions = " FROM mentions INNER JOIN messages ON messages.id == mentions.message_id"
+	local reactions = " FROM reactions INNER JOIN messages ON messages.id == reactions.message_id"
+	local where = " WHERE messages.channel_id == ?"
+
+	local m_w = mentions .. where
+	local r_w = reactions .. where
+
+	stmts.channelStats = {
+		db:prepare(stats),
+		db:prepare("SELECT count(*) AS 'Mentions Sent'" .. m_w),
+		db:prepare("SELECT count(*) AS 'Mentions Received'" .. m_w),
+		db:prepare("SELECT count(*) AS 'Reaction Sent'" .. r_w),
+		db:prepare("SELECT count(*) AS 'Reactions Received'" .. r_w),
+	}
+
+	local author = " AND author_id == ?"
+	local user = " AND user_id == ?"
+
+	local m_w_a = m_w .. author
+	local r_w_a = r_w .. author
+	local m_w_u = m_w .. user
+	local r_w_u = r_w .. user
+
+	stmts.authorStats = {
+		db:prepare(stats .. author),
+		db:prepare("SELECT count(*) AS 'Mentions Sent'" .. m_w_a),
+		db:prepare("SELECT count(*) AS 'Mentions Received'" .. m_w_u),
+		db:prepare("SELECT count(*) AS 'Reactions Sent'" .. r_w_u),
+		db:prepare("SELECT count(*) AS 'Reactions Received'" .. r_w_a),
+	}
+
+	local group = " GROUP BY 1 ORDER BY 2 DESC LIMIT ?"
+	local chan = " FROM messages WHERE channel_id == ?" .. group
+
+	local m_w_g = m_w .. group
+	local r_w_g = r_w .. group
+	local m_w_a_g =	m_w_a .. group
+	local m_w_u_g =	m_w_u .. group
+	local r_w_u_g =	r_w_u .. group
+	local r_w_a_g =	r_w_a .. group
+
+	stmts.authorTop = {
+		db:prepare("SELECT user_id, count(*) AS 'Users That You Mention'" .. m_w_a_g),
+		db:prepare("SELECT author_id, count(*) AS 'Users That Mention You'" .. m_w_u_g),
+		db:prepare("SELECT author_id, count(*) AS 'Users That You React To'" .. r_w_u_g),
+		db:prepare("SELECT user_id, count(*) AS 'Users That React To You'" .. r_w_a_g),
+	}
+
+	stmts.channelTop = {
+		db:prepare("SELECT author_id, count(*) AS Messages" .. chan),
+		db:prepare("SELECT author_id, sum(content) AS Characters" .. chan),
+		db:prepare("SELECT author_id, sum(embeds) AS Embeds" .. chan),
+		db:prepare("SELECT author_id, sum(attachments) AS Attachments" .. chan),
+		db:prepare("SELECT author_id, count(*) AS 'Mentions Sent'" .. m_w_g),
+		db:prepare("SELECT user_id, count(*) AS 'Mentions Received'" .. m_w_g),
+		db:prepare("SELECT user_id, count(*) AS 'Reactions Sent'" .. r_w_g),
+		db:prepare("SELECT author_id, count(*) AS 'Reactions Received'" .. r_w_g),
+	}
+
+	stmts.authorReactions = db:prepare("SELECT emoji, count(*) AS Reactions" .. r_w_u_g)
+	stmts.channelReactions = db:prepare("SELECT emoji, count(*) AS Reactions" .. r_w_g)
+
+	-- local rank1 = "SELECT count(*) FROM (SELECT"
+	-- local rank2 = " FROM messages WHERE channel_id == ? GROUP BY author_id HAVING"
+	-- stmts.ranks = {
+	-- 	db:prepare(rank1 .. " count(id)" .. rank2 .. " count(id) < ?)"),
+	-- 	db:prepare(rank1 .. " sum(content)" .. rank2 .. " sum(content) < ?)"),
+	-- 	db:prepare(rank1 .. " sum(embeds)" .. rank2 .. " sum(embeds) < ?)"),
+	-- 	db:prepare(rank1 .. " sum(attachments)" .. rank2 .. " sum(attachments) < ?)"),
+	-- }
+
+	self._stmts = stmts
 
 end
 
-function Database:initChannel(id)
+function Database:initChannel(channel)
 
-	local conn = self.conn
-	local client = self.client
+	assert(isInstance(channel, classes.GuildTextChannel), 'invalid channel')
 
-	local channel = client:getTextChannel(id)
-	assert(tonumber(id) and channel, 'Not a valid channel ID: ' .. id)
-
-	local name = channel.name
-	local guild = channel.guild
-	local guild_id = guild and guild.id
-	local guild_name = guild and guild.name
-
-	p(f('loading channel: %s (%s in %s) ', id, name, guild_name))
-
-	conn:exec(f("CREATE TABLE IF NOT EXISTS %q (id INTEGER PRIMARY KEY, author_id INTEGER, content TEXT);", id))
-
-	local stmts = {
-		create = conn:prepare(f("INSERT INTO %q VALUES (?, ?, ?);", id)),
-		update = conn:prepare(f("UPDATE %q SET content = ? WHERE id == ?;", id)),
-		delete = conn:prepare(f("DELETE FROM %q WHERE id == ?;", id)),
-		get = conn:prepare(f("SELECT * FROM %q WHERE id == ?;", id)),
-		messageCount = conn:prepare(f("SELECT count(*) FROM %q;", id)),
-		authorCount = conn:prepare(f("SELECT count(DISTINCT author_id) FROM %q;", id)),
-		characterCount = conn:prepare(f("SELECT sum(length(content)) FROM %q;", id)),
-		countByAuthor = conn:prepare(f("SELECT count(*) FROM %q WHERE author_id == ?;", id)),
-		countByContent = conn:prepare(f("SELECT count(*) from %q WHERE content LIKE '%%' || ? || '%%'", id)),
-		searchAuthorAsc = conn:prepare(f("SELECT * FROM %q WHERE author_id == ? ORDER BY id ASC LIMIT ?;", id)),
-		searchContentAsc = conn:prepare(f("SELECT * FROM %q WHERE content LIKE '%%' || ? || '%%' ORDER BY id ASC LIMIT ?;", id)),
-		searchAuthorContentAsc = conn:prepare(f("SELECT * FROM %q WHERE author_id == ? AND content LIKE '%%' || ? || '%%' ORDER BY id ASC LIMIT ?;", id)),
-		searchAuthorDesc = conn:prepare(f("SELECT * FROM %q WHERE author_id == ? ORDER BY id DESC LIMIT ?;", id)),
-		searchContentDesc = conn:prepare(f("SELECT * FROM %q WHERE content LIKE '%%' || ? || '%%' ORDER BY id DESC LIMIT ?;", id)),
-		searchAuthorContentDesc = conn:prepare(f("SELECT * FROM %q WHERE author_id == ? AND content LIKE '%%' || ? || '%%' ORDER BY id DESC LIMIT ?;", id)),
-		topMessage = conn:prepare(f("SELECT author_id, count(*) FROM %q GROUP BY 1 ORDER BY 2 DESC LIMIT ?;", id)),
-		topCharacter = conn:prepare(f("SELECT author_id, sum(length(content)) FROM %q GROUP BY 1 ORDER BY 2 DESC LIMIT ?;", id)),
-	}
-
-	self.stmts[id] = stmts
-
-	-- should include an option to disable fetching old messages
+	local stmts = self._stmts
+	local client = self._client
 
 	local n = 0
 	local api = client._api
-	local create = stmts.create
-	local function archiveMessages(whence, message_id)
-		repeat
-			local success, data = api:getChannelMessages(id, {[whence] = message_id, limit = 100})
-			if not success then return end
-			local done = true
-			if success and #data > 0 then
-				local j, k, h
-				if whence == 'before' then
-					j, k, h = 1, #data, 1
-				elseif whence == 'after' then
-					j, k, h = #data, 1, -1
+	local channel_id = channel.id
+
+	exec(stmts.channel, channel_id, channel.guild.id)
+
+	local row = exec(stmts.max, channel_id)
+	local id = row[1] and intstr(row[1]) or channel_id
+
+	print('archiving messages after ' .. id)
+
+	while true do
+		local messages = assert(api:getChannelMessages(channel_id, {after = id, limit = LIMIT}))
+		local m = #messages
+		if m > 0 then
+			exec(stmts.begin)
+			for i = m, 1, -1 do
+				local msg = messages[i]
+				exec(stmts.create,
+					msg.id,
+					msg.channel_id,
+					msg.author.id,
+					len(msg.content),
+					len(msg.embeds),
+					len(msg.attachments)
+				)
+				if msg.mentions then
+					for _, user in ipairs(msg.mentions) do
+						exec(stmts.mention, user.id, msg.id)
+					end
 				end
-				conn:exec('BEGIN;')
-				for i = j, k, h do
-					local v = data[i]
-					create:reset():bind(v.id, v.author.id, v.content):step()
-					n = n + 1
-					done = false
-					message_id = v.id
+				if msg.reactions then
+					for _, r in ipairs(msg.reactions) do
+						local emoji, e = r.emoji
+						if type(emoji.id) == 'string' then
+							e = emoji.name .. ':' .. emoji.id
+							emoji = emoji.id
+						else
+							e = emoji.name
+							emoji = emoji.name
+						end
+						local users = assert(api:getReactions(msg.channel_id, msg.id, e))
+						for _, user in ipairs(users) do
+							exec(stmts.reaction, emoji, user.id, msg.id)
+						end
+					end
 				end
-				conn:exec('COMMIT;')
-			else
-				p(f('no messages found %s %s', whence, message_id))
+				n = n + 1
 			end
-		until done
-	end
-
-	local res = conn:exec(f("SELECT * FROM channels WHERE id == %s;", id), 'i')
-
-	if not res then
-
-		if conn:rowexec(f("SELECT count(*) FROM %q;", id)) == 0 then
-			p('archiving all messages')
-			archiveMessages('before', nil)
+			exec(stmts.commit)
+			id = messages[1].id
+		end
+		if m == LIMIT then
+			sleep(DELAY)
 		else
-			local first_id = intToStr(conn:rowexec(f("SELECT min(id) FROM %q;", id)))
-			p('archiving messages before: ' .. first_id)
-			archiveMessages('before', first_id)
+			break
 		end
-		local stmt = conn:prepare("INSERT INTO channels VALUES (?, ?, ?, ?);")
-		stmt:bind(id, name, guild_id, guild_name):step()
-
-	elseif res[2][1] ~= name or res[4][1] ~= guild_name then
-
-		local stmt = conn:prepare("UPDATE channels SET name = ?, guild_name = ? WHERE id == ?;")
-		stmt:bind(name, guild_name, id):step()
-
 	end
 
-	local last_id = intToStr(conn:rowexec(f("SELECT max(id) FROM %q;", id)))
-	p('archiving messages after: ' .. last_id)
-	archiveMessages('after', last_id)
+	self._channels[channel_id] = true
 
-	return n
+	print(format('archived %i messages', n))
 
 end
 
-function Database:startEventHandlers()
-	self:startCreateHandler()
-	self:startUpdateHandler()
-	self:startDeleteHandler()
+local function one(stmt, out, ...)
+	local res = stmt:reset():bind(...):resultset('ih')
+	if not res then return out end
+	for i, name in ipairs(res[0]) do
+		local value = intstr(res[i][1])
+		table.insert(out, {name, value})
+	end
+	return out
 end
 
-function Database:startCreateHandler()
-	self.client:on('messageCreate', function(msg)
-		local stmt = self.stmts[msg.channel.id]
-		if not stmt then return end
-		return pcall(function()
-			return stmt.create:reset():bind(msg.id, msg.author.id, msg.content):step()
-		end)
-	end)
-end
-
-function Database:startUpdateHandler()
-	self.client:on('messageUpdate', function(msg)
-		local stmt = self.stmts[msg.channel.id]
-		if not stmt then return end
-		return pcall(function()
-			return stmt.update:reset():bind(msg.content, msg.id):step()
-		end)
-	end)
-	self.client:on('messageUpdateUncached', function(channel, id)
-		local stmt = self.stmts[channel.id]
-		if not stmt then return end
-		local msg = channel:getMessage(id)
-		if not msg then return end
-		return pcall(function()
-			return stmt.update:reset():bind(msg.content, msg.id):step()
-		end)
-	end)
-end
-
-function Database:startDeleteHandler()
-	self.client:on('messageDelete', function(msg)
-		local stmt = self.stmts[msg.channel.id]
-		if not stmt then return end
-		return pcall(function()
-			return stmt.delete:reset():bind(msg.id):step()
-		end)
-	end)
-	self.client:on('messageDeleteUncached', function(channel, id)
-		local stmt = self.stmts[channel.id]
-		if not stmt then return end
-		return pcall(function()
-			return stmt.delete:reset():bind(id):step()
-		end)
-	end)
-end
-
-function Database:getMessageData(channel_id, id)
-	local stmt = self.stmts[channel_id]
-	if not stmt then return nil end
-	local res = stmt.get:reset():bind(id):step()
-	if not res then return nil end
-	res[1] = intToStr(res[1])
-	res[2] = intToStr(res[2])
-	return res
-end
-
-function Database:getMessageCount(channel_id)
-	local stmt = self.stmts[channel_id]
-	if not stmt then return nil end
-	local res = stmt.messageCount:reset():step()
-	return tonumber(res[1])
-end
-
-function Database:getAuthorCount(channel_id)
-	local stmt = self.stmts[channel_id]
-	if not stmt then return nil end
-	local res = stmt.authorCount:reset():step()
-	return tonumber(res[1])
-end
-
-function Database:getCharacterCount(channel_id)
-	local stmt = self.stmts[channel_id]
-	if not stmt then return nil end
-	local res = stmt.characterCount:reset():step()
-	return tonumber(res[1])
-end
-
-function Database:getMessageCountByAuthor(channel_id, author_id)
-	local stmt = self.stmts[channel_id]
-	if not stmt then return nil end
-	local res = stmt.countByAuthor:reset():bind(author_id):step()
-	return tonumber(res[1])
-end
-
-function Database:getMessageCountByContent(channel_id, content)
-	local stmt = self.stmts[channel_id]
-	if not stmt then return nil end
-	local res = stmt.countByContent:reset():bind(content):step()
-	return tonumber(res[1])
-end
-
-function Database:search(channel_id, author_id, content, descending, limit)
-
-	local stmt = self.stmts[channel_id]
-	if not stmt then return nil end
-
-	limit = limit or MAX_INT
-
-	if descending then
-		if author_id and content then
-			stmt = stmt.searchAuthorContentDesc:reset():bind(author_id, content, limit)
-		elseif author_id then
-			stmt = stmt.searchAuthorDesc:reset():bind(author_id, limit)
-		elseif content then
-			stmt = stmt.searchContentDesc:reset():bind(content, limit)
+local function many(stmt, out, ...)
+	local res, n = stmt:reset():bind(...):resultset('ih')
+	if not res then return out end
+	for _, v in ipairs(res) do
+		for i = 1, n do
+			v[i] = intstr(v[i])
 		end
+	end
+	table.insert(out, res)
+	return out
+end
+
+function Database:getAuthorCount(channel)
+	local res = exec(self._stmts.authorCount, channel.id)
+	return res and tonumber(res[1])
+end
+
+function Database:getAuthorStats(channel, user)
+
+	local id = channel.id
+	if not self._channels[id] then return end
+	local stmts = self._stmts
+	local user_id = user.id
+
+	local ret = {}
+	for _, stmt in ipairs(stmts.authorStats) do
+		one(stmt, ret, id, user_id)
+	end
+
+	return ret
+
+end
+
+function Database:getChannelStats(channel)
+
+	local id = channel.id
+	if not self._channels[id] then return end
+	local stmts = self._stmts
+
+	local ret = {}
+
+	for _, stmt in ipairs(stmts.channelStats) do
+		one(stmt, ret, id)
+	end
+
+	return ret
+
+end
+
+function Database:getAuthorTopStats(channel, user, limit)
+
+	local id = channel.id
+	if not self._channels[id] then return end
+	local stmts = self._stmts
+	local user_id = user.id
+
+	local ret = {}
+
+	for _, stmt in ipairs(stmts.authorTop) do
+		many(stmt, ret, id, user_id, limit)
+	end
+
+	return ret
+
+end
+
+local map = {
+	messages = 1,
+	characters = 2,
+	embeds = 3,
+	attachments = 4,
+	mentionsSent = 5,
+	mentionsReceived = 6,
+	reactionsSent = 7,
+	reactionsReceived = 8,
+}
+
+function Database:getChannelTopStats(channel, limit, query)
+
+	local id = channel.id
+	if not self._channels[id] then return end
+	local stmts = self._stmts
+	query = query and map[query]
+
+	local ret = {}
+
+	if query then
+		many(stmts.channelTop[query], ret, id, limit)
 	else
-		if author_id and content then
-			stmt = stmt.searchAuthorContentAsc:reset():bind(author_id, content, limit)
-		elseif author_id then
-			stmt = stmt.searchAuthorAsc:reset():bind(author_id, limit)
-		elseif content then
-			stmt = stmt.searchContentAsc:reset():bind(content, limit)
+		for _, stmt in ipairs(stmts.channelTop) do
+			many(stmt, ret, id, limit)
 		end
 	end
 
-	return function()
-		local res = stmt:step()
-		if not res then return nil end
-		res[1] = intToStr(res[1])
-		res[2] = intToStr(res[2])
-		return res
-	end
+	return ret
 
 end
 
-function Database:getTopAuthorsByMessageCount(channel_id, limit)
-	local stmt = self.stmts[channel_id]
-	if not stmt then return function() end end
-	stmt = stmt.topMessage:reset():bind(limit or MAX_INT)
-	return function()
-		local res = stmt:step()
-		if not res then return nil end
-		res[1] = intToStr(res[1])
-		res[2] = intToStr(res[2])
-		return res
-	end
+function Database:getAuthorReactionStats(channel, user, limit)
+
+	local id = channel.id
+	if not self._channels[id] then return end
+	local stmts = self._stmts
+	local user_id = user.id
+
+	return many(stmts.authorReactions, {}, id, user_id, limit)
+
 end
 
-function Database:getTopAuthorsByCharacterCount(channel_id, limit)
-	local stmt = self.stmts[channel_id]
-	if not stmt then return function() end end
-	stmt = stmt.topCharacter:reset():bind(limit or MAX_INT)
-	return function()
-		local res = stmt:step()
-		if not res then return nil end
-		res[1] = intToStr(res[1])
-		res[2] = intToStr(res[2])
-		return res
-	end
+function Database:getChannelReactionStats(channel, limit)
+
+	local id = channel.id
+	if not self._channels[id] then return end
+	local stmts = self._stmts
+
+	return many(stmts.channelReactions, {}, id, limit)
+
 end
 
 return Database

@@ -13,7 +13,7 @@ local env = setmetatable({
 
 local modules = {}
 
-local function loadModule(path)
+local function loadModule(path, silent)
 	local name = remove(splitPath(path)):match('(.*).lua')
 	local success, err = pcall(function()
 		local code = assert(readFileSync(path))
@@ -21,7 +21,9 @@ local function loadModule(path)
 		modules[name] = fn()
 	end)
 	if success then
-		print('module loaded: ' .. name)
+		if not silent then
+			print('module loaded: ' .. name)
+		end
 	else
 		print(err)
 	end
@@ -64,6 +66,10 @@ end
 
 loadModules('./modules')
 
+local timer = require('timer')
+
+local auto
+
 process.stdin:on('data', function(data)
 	data = data:split('%s+')
 	if not data[2] then return end
@@ -74,6 +80,18 @@ process.stdin:on('data', function(data)
 		end
 	elseif data[1] == 'unload' then
 		return unloadModule(data[2])
+	elseif data[1] == 'auto' then
+		if data[2] == 'on' then
+			if auto then
+				timer.clearInterval(auto)
+			end
+			auto = timer.setInterval(2000, function()
+				loadModule('./modules/commands.lua', true)
+			end)
+		elseif data[2] == 'off' then
+			timer.clearInterval(auto)
+			auto = nil
+		end
 	end
 end)
 
