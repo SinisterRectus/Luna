@@ -1,16 +1,18 @@
 local sql = require('sqlite3')
 local timer = require('timer')
+local json = require('json')
 local discordia = require('discordia')
 
 local class = discordia.class
 local sleep = timer.sleep
+local decode = json.decode
 
 local format = string.format
 local classes = class.classes
 local isInstance = class.isInstance
 
 local LIMIT = 100
-local DELAY = 2000
+local DELAY = 1000
 
 local function intstr(n)
 	if tonumber(n) then
@@ -80,7 +82,7 @@ function Database:__init(name, client)
 	self._channels = {}
 
 	local stmts = {
-		create = db:prepare("INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?)"),
+		create = db:prepare("INSERT OR REPLACE INTO messages VALUES (?, ?, ?, ?, ?, ?)"),
 		channel = db:prepare("INSERT OR REPLACE INTO channels VALUES (?, ?)"),
 		mention = db:prepare("INSERT INTO mentions VALUES (?, ?)"),
 		reaction = db:prepare("INSERT INTO reactions VALUES (?, ?, ?)"),
@@ -89,6 +91,13 @@ function Database:__init(name, client)
 		authorCount = db:prepare("SELECT count(DISTINCT author_id) FROM messages WHERE channel_id == ?"),
 		begin = db:prepare("BEGIN"),
 		commit = db:prepare("COMMIT"),
+	}
+
+	stmts.delete = {
+		db:prepare("DELETE FROM messages WHERE id == ?"),
+		db:prepare("DELETE FROM mentions WHERE message_id == ?"),
+		db:prepare("DELETE FROM reactions WHERE message_id == ?"),
+		reaction = db:prepare("DELETE FROM reactions WHERE emoji == ? AND user_id == ? AND message_id == ?"),
 	}
 
 	local stats = [[
@@ -188,6 +197,7 @@ function Database:initChannel(channel)
 	local channel_id = channel.id
 
 	exec(stmts.channel, channel_id, channel.guild.id)
+	self._channels[channel_id] = true
 
 	local row = exec(stmts.max, channel_id)
 	local id = row[1] and intstr(row[1]) or channel_id
@@ -200,40 +210,11 @@ function Database:initChannel(channel)
 		if m > 0 then
 			exec(stmts.begin)
 			for i = m, 1, -1 do
-				local msg = messages[i]
-				exec(stmts.create,
-					msg.id,
-					msg.channel_id,
-					msg.author.id,
-					len(msg.content),
-					len(msg.embeds),
-					len(msg.attachments)
-				)
-				if msg.mentions then
-					for _, user in ipairs(msg.mentions) do
-						exec(stmts.mention, user.id, msg.id)
-					end
-				end
-				if msg.reactions then
-					for _, r in ipairs(msg.reactions) do
-						local emoji, e = r.emoji
-						if type(emoji.id) == 'string' then
-							e = emoji.name .. ':' .. emoji.id
-							emoji = emoji.id
-						else
-							e = emoji.name
-							emoji = emoji.name
-						end
-						local users = assert(api:getReactions(msg.channel_id, msg.id, e))
-						for _, user in ipairs(users) do
-							exec(stmts.reaction, emoji, user.id, msg.id)
-						end
-					end
-				end
-				n = n + 1
+				self:addMessage(messages[i])
 			end
 			exec(stmts.commit)
 			id = messages[1].id
+			n = n + m
 		end
 		if m == LIMIT then
 			sleep(DELAY)
@@ -242,10 +223,108 @@ function Database:initChannel(channel)
 		end
 	end
 
-	self._channels[channel_id] = true
-
 	print(format('archived %i messages', n))
 
+end
+
+function Database:addMessage(msg)
+
+	if not self._channels[msg.channel_id] then return end
+	local stmts = self._stmts
+
+	exec(stmts.create,
+		msg.id,
+		msg.channel_id,
+		msg.author.id,
+		len(msg.content),
+		len(msg.embeds),
+		len(msg.attachments)
+	)
+
+	if msg.mentions then
+		for _, user in ipairs(msg.mentions) do
+			exec(stmts.mention, user.id, msg.id)
+		end
+	end
+
+	if msg.reactions then
+		for _, r in ipairs(msg.reactions) do
+			local emoji, e = r.emoji
+			if type(emoji.id) == 'string' then
+				e = emoji.name .. ':' .. emoji.id
+				emoji = emoji.id
+			else
+				e = emoji.name
+				emoji = emoji.name
+			end
+			local users = assert(self._client._api:getReactions(msg.channel_id, msg.id, e)) -- TODO: iterate through all users
+			for _, user in ipairs(users) do
+				exec(stmts.reaction, emoji, user.id, msg.id)
+			end
+		end
+	end
+
+end
+
+function Database:addReaction(r)
+
+	if not self._channels[r.channel_id] then return end
+	local stmts = self._stmts
+
+	local emoji = r.emoji
+	if type(emoji.id) == 'string' then
+		emoji = emoji.id
+	else
+		emoji = emoji.name
+	end
+
+	exec(stmts.reaction, emoji, r.user_id, r.message_id)
+
+end
+
+function Database:removeReaction(r)
+
+	if not self._channels[r.channel_id] then return end
+	local stmts = self._stmts
+
+	local emoji = r.emoji
+	if type(emoji.id) == 'string' then
+		emoji = emoji.id
+	else
+		emoji = emoji.name
+	end
+
+	exec(stmts.delete.reaction, emoji, r.user_id, r.message_id)
+
+end
+
+function Database:removeMessage(msg)
+
+	if not self._channels[msg.channel_id] then return end
+	local stmts = self._stmts
+
+	for _, stmt in ipairs(stmts.delete) do
+		exec(stmt, msg.id)
+	end
+
+end
+
+function Database:startEventHandlers()
+	self._client:on('raw', function(payload)
+		payload = decode(payload)
+		local t = payload.t
+		if t == 'MESSAGE_CREATE' then
+			return self:addMessage(payload.d)
+		elseif t == 'MESSAGE_UPDATE' then
+			return -- TODO, maybe
+		elseif t == 'MESSAGE_DELETE' then
+			return self:removeMessage(payload.d)
+		elseif t == 'MESSAGE_REACTION_ADD' then
+			return self:addReaction(payload.d)
+		elseif t == 'MESSAGE_REACTION_REMOVE' then
+			return self:removeReaction(payload.d)
+		end
+	end)
 end
 
 local function one(stmt, out, ...)
@@ -286,7 +365,6 @@ function Database:getAuthorStats(channel, user)
 	for _, stmt in ipairs(stmts.authorStats) do
 		one(stmt, ret, id, user_id)
 	end
-
 	return ret
 
 end
@@ -298,11 +376,9 @@ function Database:getChannelStats(channel)
 	local stmts = self._stmts
 
 	local ret = {}
-
 	for _, stmt in ipairs(stmts.channelStats) do
 		one(stmt, ret, id)
 	end
-
 	return ret
 
 end
@@ -315,11 +391,9 @@ function Database:getAuthorTopStats(channel, user, limit)
 	local user_id = user.id
 
 	local ret = {}
-
 	for _, stmt in ipairs(stmts.authorTop) do
 		many(stmt, ret, id, user_id, limit)
 	end
-
 	return ret
 
 end
@@ -343,7 +417,6 @@ function Database:getChannelTopStats(channel, limit, query)
 	query = query and map[query]
 
 	local ret = {}
-
 	if query then
 		many(stmts.channelTop[query], ret, id, limit)
 	else
@@ -351,7 +424,6 @@ function Database:getChannelTopStats(channel, limit, query)
 			many(stmt, ret, id, limit)
 		end
 	end
-
 	return ret
 
 end

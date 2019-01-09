@@ -4,7 +4,7 @@ local channels = {
 
 local stars = setmetatable({}, {__index = function() return 0 end})
 
-local function star(msg) -- TODO: fix this
+local function star(msg)
 
 	if msg.author.discriminator ~= '0000' then return end
 
@@ -44,8 +44,12 @@ local function caret(msg)
 	end
 end
 
+local function xd(msg)
+	return msg.author.id == '366610426441498624' and msg.content:lower() == 'xd'
+end
+
 return function(msg)
-	if channels[msg.channel.id] then
-		return dot(msg) or caret(msg) or star(msg)
-	end
+	-- if channels[msg.channel.id] then
+		return star(msg)
+	-- end
 end

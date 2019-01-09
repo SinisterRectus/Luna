@@ -1,7 +1,8 @@
 local discordia = require('discordia')
 local pp = require('pretty-print')
-local fs = require('coro-fs')
+local fs = require('fs')
 local timer = require('timer')
+local pathJoin = require('pathJoin')
 
 local random, max = math.random, math.max
 local f, upper = string.format, string.upper
@@ -20,10 +21,22 @@ local actionType = discordia.enums.actionType
 local Date = discordia.Date
 local Time = discordia.Time
 
-local function searchMember(members, arg)
+local function searchMember(msg, arg)
 
-	local member = members:get(arg)
+	local guild = msg.guild
+	local members = guild.members
+	local user = msg.mentionedUsers.first
+
+	local member = user and guild:getMember(user) or members:get(arg)
 	if member then return member end
+
+	if arg:find('#', 1, true) then
+		local username, discriminator = arg:match('(.*)#(%d+)')
+		member = members:find(function(m) return m.username == username and m.discriminator == discriminator end)
+		if member then
+			return member
+		end
+	end
 
 	local distance = math.huge
 	local lowered = arg:lower()
@@ -49,7 +62,11 @@ local function searchMember(members, arg)
 		end
 	end
 
-	return member
+	if member then
+		return member
+	else
+		return nil, f('No member found for: `%s`', arg)
+	end
 
 end
 
@@ -73,29 +90,31 @@ local cmds = setmetatable({}, {__call = function(self, msg)
 
 	local success, content, code = pcall(self[cmd], arg, msg)
 
+	local reply, err
+
 	if success then
 
 		if type(content) == 'string' then
 			if #content > 1900 then
-				return msg:reply {
+				reply, err = msg:reply {
 					content = 'Content is too large. See attached file.',
 					file = {os.time() .. '.txt', content},
 					code = true,
 				}
 			elseif #content > 0 then
 				if code then
-					return msg:reply{content = content, code = code}
+					reply, err = msg:reply{content = content, code = code}
 				else
-					return msg:reply(content)
+					reply, err = msg:reply(content)
 				end
 			end
 		elseif type(content) == 'table' then
-			return msg:reply(content)
+			reply, err = msg:reply(content)
 		end
 
 	else
 
-		local reply = msg:reply {content = content,	code = 'lua'}
+		reply = msg:reply {content = content,	code = 'lua'}
 		if reply then
 			local c = msg.channel
 			if c.guild.me:hasPermission(c, 'manageMessages') then
@@ -105,158 +124,253 @@ local cmds = setmetatable({}, {__call = function(self, msg)
 
 	end
 
+	if err and not reply then
+		print(err)
+	end
+
 end})
 
-local docs = {}
+local classDocs = {}
+local fieldDocs = {}
 
-coroutine.wrap(function()
+do -- DOCS LOADER --
 
-	local pathJoin = require('pathjoin').pathJoin
+	local docs = {}
 
-	local function updateViaGit(ownerName, repoName) -- luacheck: ignore
-		if not fs.stat(repoName) then
-			print("Directory not found, cloning from GitHub...")
-			os.execute(f("git clone https://github.com/%s/%s.git", ownerName, repoName))
-		else
-			print("Directory found, updating via GitHub...")
-			os.execute(f("git -C %q pull", repoName))
-		end
-		if not fs.stat(repoName) then
-			error("Could not find or clone repository.")
-		end
-		print('Updated.')
-	end
+	local pathjoin = require('pathjoin')
+	local pathJoin = pathjoin.pathJoin
 
-	local function parseFiles(path)
-		for v in fs.scandir(path) do
-			local joined = pathJoin(path, v.name)
-			if v.type == 'file' then
-				docs[v.name:match('(.*)%.')] = joined
-			elseif v.name ~= '.git' then
-				parseFiles(joined)
+	local function scan(dir)
+		for fileName, fileType in fs.scandirSync(dir) do
+			local path = pathJoin(dir, fileName)
+			if fileType == 'file' then
+				coroutine.yield(path)
+			else
+				scan(path)
 			end
 		end
 	end
 
-	-- updateViaGit('SinisterRectus', 'Discordia.wiki') -- uncomment to update on load
-	parseFiles('Discordia.wiki')
-
-end)()
-
-local function searchDocs(arg)
-
-	if not arg then return end
-
-	local matches = {}
-	local lowered = arg:lower()
-
-	for name in pairs(docs) do
-		if name:lower():find(lowered, 1, true) then
-			insert(matches, name)
-		end
+	local function checkType(docstring, token)
+		return docstring:find(token) == 1
 	end
 
-	if #matches == 0 then
-		for name, path in pairs(docs) do
-			local data = fs.readFile(path)
-			if data and data:lower():find(lowered, 1, true) then
-				insert(matches, name)
+	local function match(s, pattern) -- only useful for one return value
+		return assert(s:match(pattern), s)
+	end
+
+
+	for file in coroutine.wrap(function() scan('/home/sinister/luna/deps/discordia') end) do
+
+		local d = assert(fs.readFileSync(file))
+
+		local class = {
+			methods = {},
+			statics = {},
+			properties = {},
+			parents = {},
+		}
+
+		for s in d:gmatch('--%[=%[%s*(.-)%s*%]=%]') do
+
+			if checkType(s, '@i?c') then
+
+				class.name = match(s, '@i?c (%w+)')
+				class.userInitialized = checkType(s, '@ic')
+				for parent in s:gmatch('x (%w+)') do
+					insert(class.parents, parent)
+				end
+				class.desc = match(s, '@d (.+)'):gsub('\r?\n', ' ')
+				class.parameters = {}
+				for optional, paramName, paramType in s:gmatch('@(o?)p ([%w%p]+)%s+([%w%p]+)') do
+					insert(class.parameters, {paramName, paramType, optional == 'o'})
+				end
+
+			elseif checkType(s, '@s?m') then
+
+				local method = {parameters = {}}
+				method.name = match(s, '@s?m ([%w%p]+)')
+				for optional, paramName, paramType in s:gmatch('@(o?)p ([%w%p]+)%s+([%w%p]+)') do
+					insert(method.parameters, {paramName, paramType, optional == 'o'})
+				end
+				method.returnType = match(s, '@r ([%w%p]+)')
+				method.desc = match(s, '@d (.+)'):gsub('\r?\n', ' ')
+				insert(checkType(s, '@sm') and class.statics or class.methods, method)
+
+			elseif checkType(s, '@p') then
+
+				local propertyName, propertyType, propertyDesc = s:match('@p (%w+)%s+([%w%p]+)%s+(.+)')
+				assert(propertyName, s); assert(propertyType, s); assert(propertyDesc, s)
+				propertyDesc = propertyDesc:gsub('\r?\n', ' ')
+				insert(class.properties, {
+					name = propertyName,
+					type = propertyType,
+					desc = propertyDesc,
+				})
+
 			end
+
+		end
+
+		if class.name then
+			docs[class.name] = class
+		end
+
+	end
+
+	local function loadClass(class, output)
+		for _, v in ipairs(class.properties) do
+			insert(output.properties, v.name)
+		end
+		for _, v in ipairs(class.statics) do
+			insert(output.statics, v.name)
+		end
+		for _, v in ipairs(class.methods) do
+			insert(output.methods, v.name)
 		end
 	end
 
-	if #matches == 0 then return end
-	sort(matches)
-	return matches
+	local function loadFields(class, output)
 
-end
+		local url = 'https://github.com/SinisterRectus/Discordia/wiki/' .. class.name
 
-local heading = '## '
-
-local function changelogList()
-
-	local file = io.open('CHANGELOG.md')
-
-	local content = {}
-	for line in file:lines() do
-		if line:startswith(heading) then
-			line = line:gsub('%c', ''):gsub(heading, '')
-			insert(content, line)
+		for _, v in ipairs(class.properties) do
+			output[v.name] = {
+				embed = {
+					title = class.name .. '.' .. v.name,
+					url = url,
+					description = v.desc,
+				}
+			}
 		end
-	end
 
-	file:close()
-
-	return concat(content, ', '), 'lua'
-
-end
-
-cmds['changelog'] = function(arg)
-
-	if arg == 'list' then
-		return changelogList()
-	end
-
-	local content = {}
-	local file = io.open('CHANGELOG.md')
-
-	local version
-	if arg then
-		version = heading .. arg
-	else
-		version = heading
-	end
-
-	local run
-	for line in file:lines() do
-		if run then
-			if line:startswith(heading) then
-				break
-			end
-			insert(content, line)
-		else
-			if line:startswith(version) then
-				run = true
-				insert(content, line)
-			end
+		for _, v in ipairs(class.statics) do -- TODO: returns and parameters
+			output[v.name] = {
+				embed = {
+					title = class.name .. '.' .. v.name .. '()',
+					url = url,
+					description = v.desc,
+				}
+			}
 		end
-	end
 
-	file:close()
-
-	if #content > 0 then
-		content = concat(content, '\n')
-		if #content > 1000 then
-			content = content:sub(1, 1000) .. ' ...'
+		for _, v in ipairs(class.methods) do -- TODO: returns and parameters
+			output[v.name] = {
+				embed = {
+					title = class.name .. ':' .. v.name .. '()',
+					url = url,
+					description = v.desc,
+				}
+			}
 		end
-		return content, 'md'
-	else
-		return changelogList()
+
 	end
 
-end
+	for className, class in pairs(docs) do
+
+		fieldDocs[className] = {}
+
+		local title = className
+		if next(class.parents) then
+			title = title .. ' : ' .. concat(class.parents, ', ')
+		end
+		local tbl = {properties = {}, methods = {}, statics = {}}
+		for _, name in ipairs(class.parents) do
+			loadClass(docs[name], tbl)
+			loadFields(docs[name], fieldDocs[className])
+		end
+		loadClass(class, tbl)
+		loadFields(class, fieldDocs[className])
+
+		local fields = {}
+		if next(tbl.properties) then
+			insert(fields, {name = 'Properties', value = concat(tbl.properties, ', ')})
+		end
+		if next(tbl.statics) then
+			insert(fields, {name = 'Static Methods', value = concat(tbl.statics, ', ')})
+		end
+		if next(tbl.methods) then
+			insert(fields, {name = 'Methods', value = concat(tbl.methods, ', ')})
+		end
+
+		local url = 'https://github.com/SinisterRectus/Discordia/wiki/' .. className
+
+		classDocs[className] = {
+			embed = {
+				title = title,
+				url = url,
+				description = class.desc,
+				fields = fields,
+			}
+		}
+
+
+	end
+
+end -- DOCS LOADER --
 
 cmds['docs'] = function(arg)
 
-	local matches = searchDocs(arg)
-	if not matches then return end
-	local url = discordia.package.homepage
-	for i, match in ipairs(matches) do
-		matches[i] = f('[%s](%s/wiki/%s)', match, url, match)
+	if not arg then return end -- TODO: handle no arg
+	arg = arg:lower()
+
+	local queries = {}
+	for query in arg:gmatch('[%w_]+') do
+		insert(queries, query)
 	end
-	return {embed = {description = concat(matches, ', ')}}
 
-end
+	-- try all combinations of "a b" arguments
+	for n = 1, #queries do
 
-cmds['mdocs'] = function(arg)
+		local a = {}
+		for i = 1, n do
+			insert(a, queries[i])
+		end
+		local b = {}
+		for i = n + 1, #queries do
+			insert(b, queries[i])
+		end
 
-	local matches = searchDocs(arg)
-	if not matches then return end
-	local url = discordia.package.homepage
-	for i, match in ipairs(matches) do
-		matches[i] = f('<%s/wiki/%s>', url, match)
+		a = concat(a)
+		b = concat(b)
+
+		if #b > 0 then
+
+			-- TODO
+			-- fuzzy match "a" with class and match "b" with field (multiple results)
+			-- match "a" with class and fuzzy match "b" with field (multiple results)
+			-- fuzzy match "a" with class and fuzzy match "b" with field (multiple results)
+			-- fuzzy match "a b" with class (multiple results)
+			-- fuzzy match "a b" with field (multiple results)
+
+			-- match "a" with class and match "b" with field
+			for className, v in pairs(fieldDocs) do
+				if className:lower() == a then
+					for fieldName, content in pairs(v) do
+						if fieldName:lower() == b then
+							return content
+						end
+					end
+				end
+			end
+
+		else
+
+			-- TODO
+			-- match "arg" with field (multiple results)
+			-- fuzzy match "arg" with class (multiple results)
+			-- fuzzy match "arg" with field (multiple results)
+
+			-- match "a" with class
+			for k, v in pairs(classDocs) do
+				if k:lower() == a then
+					return v
+				end
+			end
+
+		end
+
 	end
-	return concat(matches, ', ')
 
 end
 
@@ -283,11 +397,10 @@ end
 
 cmds['whois'] = function(arg, msg)
 
-	if not arg then return end
-	arg = arg:lower()
-
-	local m = searchMember(msg.guild.members, arg)
-	if not m then return end
+	local m, err = searchMember(msg, arg)
+	if not m then
+		return err
+	end
 
 	local color = m:getColor().value
 
@@ -309,8 +422,15 @@ cmds['whois'] = function(arg, msg)
 end
 
 cmds['avatar'] = function(arg, msg)
-	local user = arg and searchMember(msg.guild.members, arg) or msg.author
-	return {embed = {image = {url = user.avatarURL}}}
+	if not arg then
+		return {embed = {image = {url = msg.author.avatarURL}}}
+	else
+		local member, err = searchMember(msg, arg)
+		if not member then
+			return err
+		end
+		return {embed = {image = {url = member.avatarURL}, description = member.mentionString}}
+	end
 end
 
 cmds['icon'] = function(_, msg)
@@ -409,6 +529,27 @@ local function prettyLine(...)
 	return concat(ret, '\t')
 end
 
+cmds['poop'] = function(arg, msg)
+
+	local guild = msg.guild
+
+	local author = guild:getMember(msg.author)
+	if not author then return end
+
+	if not author:hasPermission('manageNicknames') then return end
+	if not guild.me:hasPermission('manageNicknames') then return end
+
+	local member = searchMember(msg, arg)
+	if not member then return end
+
+	if author.highestRole.position > member.highestRole.position then
+		if member:setNickname('💩') then
+			return msg:addReaction('✅')
+		end
+	end
+
+end
+
 local sandbox = setmetatable({
 	require = require,
 	discordia = discordia,
@@ -418,10 +559,7 @@ cmds['lua'] = function(arg, msg)
 
 	if not arg then return end
 
-	local owner = msg.client.owner
-	if msg.author ~= owner then
-		return f('%s only %s may use this command', msg.author.mentionString, owner.mentionString)
-	end
+	if msg.author ~= msg.client.owner then return end
 
 	arg = arg:gsub('```lua\n?', ''):gsub('```\n?', '')
 
@@ -504,8 +642,8 @@ end
 
 cmds['block'] = function(arg, msg)
 	if msg.author == msg.client.owner and msg.guild.me:hasPermission(msg.channel, 'manageRoles') then
-		local member = searchMember(msg.guild.members, arg)
-		if not member then return end
+		local member, err = searchMember(msg, arg)
+		if not member then return err end
 		local o = msg.channel:getPermissionOverwriteFor(member)
 		if o and o:denyPermissions('sendMessages') then
 			return f('⛔ %s (%s) blocked', member.name, member.id), true
@@ -515,19 +653,13 @@ end
 
 cmds['unblock'] = function(arg, msg)
 	if msg.author == msg.client.owner and msg.guild.me:hasPermission(msg.channel, 'manageRoles') then
-		local member = searchMember(msg.guild.members, arg)
-		if not member then return end
+		local member, err = searchMember(msg, arg)
+		if not member then return err end
 		local o = msg.channel:getPermissionOverwriteFor(member)
 		if o and o:clearPermissions('sendMessages') then
 			return f('✅ %s (%s) unblocked', member.name, member.id), true
 		end
 	end
-end
-
-cmds['mention'] = function(arg, msg)
-	local member = searchMember(msg.channel.members, arg)
-	if not member then return end
-	return f('Mention from **%s** (%s): %s', msg.author.username, msg.author.id, member.mentionString)
 end
 
 local function getBestChannel(guild, arg)
@@ -662,7 +794,7 @@ cmds['audit'] = function(arg, msg)
 	if not author or not author:hasPermission('viewAuditLog') then return end
 
 	local limit = tonumber(arg)
-	local logs = guild:getAuditLogs {limit = limit and clamp(limit, 1, 10) or 10}
+	local logs = guild:getAuditLogs {limit = limit and clamp(limit, 1, 20) or 10}
 	if not logs then return end
 
 	logs = logs:toArray()
@@ -720,6 +852,39 @@ cmds['audit'] = function(arg, msg)
 
 end
 
+cmds['joined'] = function(_, msg)
+
+	local guild = msg.guild
+	local members = {}
+
+	for m in msg.channel:getMessages(10):iter() do
+		local member = guild:getMember(m.author)
+		if member.joinedAt then
+			members[member] = true
+		end
+	end
+
+	local sorted = {}
+	for member in pairs(members) do
+		insert(sorted, {member.joinedAt, member.name})
+	end
+	sort(sorted, function(a, b) return a[1] > b[1] end)
+
+	local fields = {}
+
+	local now = Date()
+	for _, v in ipairs(sorted) do
+		local seconds = Date.parseISO(v[1])
+		local t = now - Date(seconds)
+		insert(fields, {name = v[2], value = t:toString() .. ' ago'})
+	end
+
+	return {
+		embed = {fields = fields}
+	}
+
+end
+
 cmds['discrims'] = function(arg, msg)
 
 	local counts = setmetatable({}, {__index = function() return 0 end})
@@ -747,7 +912,7 @@ cmds['discrims'] = function(arg, msg)
 			insert(content, f(fmt, i, d[1], d[2]))
 		end
 	end
-	return concat(content, '\n')
+	return concat(content, '\n'), true
 
 end
 
@@ -759,9 +924,9 @@ local function spotifyIncrement(counts, hash, member)
 	local count = counts[hash]
 	if count then
 		count[1] = count[1] + 1
-		insert(count, member.mentionString)
+		insert(count, member.tag)
 	else
-		counts[hash] = {1, hash, member.mentionString}
+		counts[hash] = {1, hash, member.tag}
 	end
 end
 
@@ -860,18 +1025,33 @@ cmds['tracks'] = function(arg, msg)
 
 end
 
+local coverCache = {}
+
+local function getAlbumCover(id)
+	local cover = coverCache[id]
+	if cover then
+		return cover
+	end
+	local res, data = require('coro-http').request("GET", "https://i.scdn.co/image/" .. id)
+	if res.code == 200 then
+		coverCache[id] = data
+		return data
+	end
+end
+
 cmds['listening'] = function(arg, msg)
 
-	local member = arg and searchMember(msg.guild.members, arg) or msg.guild:getMember(msg.author)
+	local member = arg and searchMember(msg, arg) or msg.guild:getMember(msg.author)
 	if not member then return end
 
-	local artist, album, track, start, stop
+	local artist, album, track, start, stop, image
 	if spotifyActivity(member) then
 		artist = member.activity.state
 		album = member.activity.textLarge
 		track = member.activity.details
 		start = member.activity.start
 		stop = member.activity.stop
+		image = member.activity.imageLarge
 	end
 
 	if artist and album and track and start and stop then
@@ -884,12 +1064,12 @@ cmds['listening'] = function(arg, msg)
 				if act.state == artist then
 					if act.textLarge == album then
 						if act.details == track then
-							insert(other.tracks, m.mentionString)
+							insert(other.tracks, m.tag)
 						else
-							insert(other.albums, m.mentionString)
+							insert(other.albums, m.tag)
 						end
 					else
-						insert(other.artists, m.mentionString)
+						insert(other.artists, m.tag)
 					end
 				end
 			end
@@ -911,7 +1091,10 @@ cmds['listening'] = function(arg, msg)
 			insert(fields, {name = 'Current Track Listeners', value = concat(other.tracks, ', ')})
 		end
 
+		local thumbnail = image and getAlbumCover(image:match('spotify:(.*)'))
+
 		return {
+			file = thumbnail and {'image.jpg', thumbnail},
 			embed = {
 				author = {
 					name = member.name,
@@ -920,10 +1103,165 @@ cmds['listening'] = function(arg, msg)
 				description = 'Listening on Spotify',
 				fields = fields,
 				color = spotifyGreen,
+				thumbnail = thumbnail and {url = "attachment://image.jpg"},
 			}
 		}
 
 	end
+
+end
+
+local http = require('coro-http')
+
+cmds['steal'] = function(arg, msg)
+
+	if not arg then return end
+	if msg.author ~= msg.client.owner then return end
+	local messages = msg.channel:getMessages(50)
+
+	arg = arg:lower()
+
+	local subs = {}
+	local other = {}
+
+	for message in messages:iter() do
+		for animated, name, id in message.content:gmatch('<(a?):([%w_]+):(%d+)>') do
+			if name:lower():find(arg) then
+				insert(subs, {name, id, animated == 'a'})
+			else
+				insert(other, {name, id, animated == 'a'})
+			end
+		end
+	end
+
+	local function levensort(a, b)
+		return a[1]:levenshtein(arg) < b[1]:levenshtein(arg)
+	end
+
+	local emoji
+	if subs[1] then
+		sort(subs, levensort)
+		emoji = subs[1]
+	elseif other[1] then
+		sort(other, levensort)
+		emoji = other[1]
+	end
+
+	if emoji then
+		local guild = msg.client:getGuild('149206227455311873')
+		if guild then
+			local ext = emoji[3] and 'gif' or 'png'
+			local res, data = http.request('GET', f("https://cdn.discordapp.com/emojis/%s.%s", emoji[2], ext))
+			if res.code == 200 then
+				local filename = f('temp.%s', ext)
+				fs.writeFileSync(filename, data) -- hack for now
+				emoji = guild:createEmoji(emoji[1], filename)
+				if emoji then
+					return f("Emoji %s stolen!", emoji.mentionString)
+				end
+			end
+		end
+	end
+
+end
+
+local DAPI_PARTNER_DATE = discordia.Date.fromSnowflake('261716079448031242')
+
+cmds['splash'] = function(_, msg)
+	if msg.guild.id ~= DAPI then return end
+	if msg.guild.splash then
+		return msg.guild.splashURL
+	else
+		local days = (discordia.Date() - DAPI_PARTNER_DATE):toDays()
+		return f('Days without a guild splash: %i', days)
+	end
+end
+
+cmds['emojify'] = function(arg, msg)
+
+	local member = searchMember(msg, arg)
+	if not member then return end
+
+	if member.avatar then
+		local guild = msg.client:getGuild('149206227455311873')
+		if guild then
+			local ext = member.avatar:find('a_') and 'gif' or 'png'
+			local res, data = http.request('GET', member.avatarURL)
+			if res.code == 200 then
+				local filename = f('temp.%s', ext)
+				fs.writeFileSync(filename, data) -- hack for now
+				local emoji = guild:createEmoji(member.username, filename)
+				-- timer.setTimeout(5000, coroutine.wrap(emoji.delete), emoji)
+				if emoji then
+					return {mention = emoji}
+				end
+			end
+		end
+	end
+
+end
+
+local DAPI_GAMING_GUILD = '513126885279137792'
+local gamingRoles = { -- channel = role
+	['514872890613825544'] = '513733703243923460', -- clashers,
+	['514879656717975569'] = '514922820539514901', -- skribblers,
+}
+
+cmds['sub'] = function(_, msg)
+
+	if msg.guild.id ~= DAPI_GAMING_GUILD then return end
+	local member = msg.guild:getMember(msg.author)
+	if not member then return end
+
+	local role = gamingRoles[msg.channel.id]
+	if role and member:addRole(role) then
+		return msg:addReaction('✅')
+	end
+
+end
+
+cmds['unsub'] = function(_, msg)
+
+	if msg.guild.id ~= DAPI_GAMING_GUILD then return end
+	local member = msg.guild:getMember(msg.author)
+	if not member then return end
+
+	local role = gamingRoles[msg.channel.id]
+	if role and member:removeRole(role) then
+		return msg:addReaction('✅')
+	end
+
+end
+
+cmds['addemoji'] = function(arg, msg)
+
+	if msg.author ~= msg.client.owner then return end
+
+	local args = arg:split('%s+')
+	local name, url = args[1], args[2]
+	if not name or not url then return end
+
+	local res, data = http.request('GET', url)
+	if res.code == 200 then
+		local filename = table.remove(pathJoin.splitPath(url))
+		fs.writeFileSync(filename, data) -- hack for now
+		local emoji = msg.guild:createEmoji(name, filename)
+		if emoji then
+			return {mention = emoji}
+		end
+	end
+
+end
+
+cmds['rate'] = function(arg, msg)
+
+	local n = arg and clamp(arg, 2, 100) or 100
+	local m = msg.channel:getMessages(n):toArray('id')
+	local t = discordia.Date.fromSnowflake(m[1].id) - discordia.Date.fromSnowflake(m[#m].id)
+
+	t = t:toMinutes()
+
+	return f('Current message rate: %g messages per minute (measured for the previous %i messages)', #m / t, #m)
 
 end
 

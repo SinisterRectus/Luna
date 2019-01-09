@@ -3,15 +3,16 @@ local loader = require('./loader')
 local discordia = require('discordia')
 local timer = require('timer')
 
-discordia.extensions.string()
+discordia.extensions()
 
 local DAPI_GUILD = '81384788765712384'
 local DISCORDIA_CHANNEL = '381890411414683648'
 -- local DAPI_GENERAL = '381870553235193857'
-local LOG_CHANNEL = '399409813710307338'
+local LOG_CHANNEL = '430492289077477416'
 
 local sw = discordia.Stopwatch()
 local client = discordia.Client {
+	-- logLevel = discordia.enums.logLevel.debug,
 	cacheAllMembers = true,
 }
 
@@ -28,7 +29,7 @@ clock:on('hour', function()
 	if me:hasPermission('manageNicknames') then
 		local position = me.highestRole.position
 		for member in guild.members:findAll(function(m)
-			return m.name:startswith('!') and m.highestRole.position < position
+			return m.name:startswith('!') and m.highestRole.position < position and m.status ~= 'offline'
 		end) do
 			member:setNickname('💩')
 			timer.sleep(1000)
@@ -37,7 +38,9 @@ clock:on('hour', function()
 
 end)
 
-local db = require('./Database')('luna', client)
+local Database = require('./Database')
+
+local db = Database('luna', client)
 discordia.storage.db = db
 
 client:once('ready', function()
@@ -46,8 +49,7 @@ client:once('ready', function()
 	p('Startup time:', sw.milliseconds)
 
 	db:initChannel(client:getChannel(DISCORDIA_CHANNEL))
-	-- db:initChannel(client:getChannel(DAPI_GENERAL))
-	-- db:startEventHandlers()
+	db:startEventHandlers()
 
 	clock:start()
 
@@ -56,7 +58,7 @@ end)
 client:on('messageCreate', function(msg)
 
 	local author = msg.author
-	if author.bot then return end
+	if author.bot and author.discriminator ~= '0000' then return end
 	if author == client.user then return end
 
 	local channel = msg.channel
@@ -77,6 +79,10 @@ client:on('messageCreate', function(msg)
 
 	if loader.commands then
 		loader.commands(msg)
+	end
+
+	if loader.clash then
+		loader.clash(msg)
 	end
 
 end)
