@@ -382,7 +382,7 @@ cmds['roll'] = function(arg)
 	local n = clamp(tonumber(arg) or 6, 3, 20)
 	return {
 		embed = {
-			description = f('You roll a %i-sided die. It lands on %i.', n, random(1, n))
+			description = f('You roll a %i-sided dice. It lands on %i.', n, random(1, n))
 		}
 	}
 end
