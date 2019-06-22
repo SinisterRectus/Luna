@@ -78,11 +78,40 @@ local function lewd(msg)
 
 end
 
+local maybeBan = {}
+
+local function nsfwShouldBan(msg)
+
+	local member = msg.guild:getMember(msg.author)
+
+	if not member then return end -- member not be found
+	if member.avatar then return end -- ignore members with an avatar
+	if #member.roles > 0 then return end -- ignore members with a role
+
+	for _, filter in ipairs(nsfwFilters) do  -- check for the lewd urls
+		if msg.content:find(filter, 1, true) then
+			if maybeBan[member.id] then -- trigger on the second message
+				maybeBan[member.id] = nil
+				return true
+			else -- wait for a second message before banning
+				maybeBan[member.id] = true
+			end
+		end
+	end
+
+end
+
 return function(msg)
 
 	local channel = msg.channel
 	local guild = channel.guild
 	local bot = guild.me
+
+	-- if bot:hasPermission('banMembers') then
+	-- 	if nsfwShouldBan(msg) then
+	-- 		return guild:banMember(msg.author, 'nsfw bot', 7)
+	-- 	end
+	-- end
 
 	if bot:hasPermission(channel, 'manageMessages') then
 		if lewd(msg) then -- detect nsfw bot
