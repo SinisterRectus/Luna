@@ -2,10 +2,6 @@ local discordia = require('discordia')
 
 local Date = discordia.Date
 
-local channels = {
-	['381890411414683648'] = true, -- DAPI #lua_discordia
-}
-
 local stars = setmetatable({}, {__index = function() return 0 end})
 
 local function star(msg)
@@ -15,12 +11,13 @@ local function star(msg)
 	local embed = msg.embed
 	if not embed then return end
 
-	if not embed.title or not embed.title:find('star added') then return end
+	if not embed.title then return end
+	if not embed.title:find('New star added') then return end
 
-	local name = embed.author and embed.author.name
-	if not name then return end
+	if not embed.author then return end
+	if not embed.author.name then return end
 
-	local key = msg.channel.id .. name
+	local key = msg.channel.id .. embed.author.name .. embed.title
 	stars[key] = stars[key] + 1
 
 	if stars[key] > 1 then
@@ -29,7 +26,7 @@ local function star(msg)
 				'Star spam detected at %q (%q) by %q',
 				msg.channel.name,
 				msg.channel.id,
-				name
+				embed.author.name
 			)
 		end
 		return true
@@ -37,31 +34,7 @@ local function star(msg)
 
 end
 
-local function dot(msg)
-	return msg.content == '.'
-end
-
-local function caret(msg)
-	if msg.content:find('%^') then
-		local _, n = msg.content:gsub('%^', '')
-		return n > 0.35 * msg.content:len()
-	end
-end
-
-local function xd(msg)
-	return msg.author.id == '366610426441498624' and msg.content:lower() == 'xd'
-end
-
--- return function(msg)
--- 	local channel = msg.channel
--- 	if channels[channel.id] and channel.guild.me:hasPermission(channel, 'manageMessages') then
--- 		if star(msg) or dot(msg) or caret(msg) or xd(msg) then
--- 			return msg:delete()
--- 		end
--- 	end
--- end
-
-local filters = {
+local nsfwFilters = {
 	'nakedphotos.club',
 	'privatepage.vip',
 	'viewc.site',
@@ -74,10 +47,9 @@ local DEVS = '381886868708655104'-- DAPI #devs
 local function lewd(msg)
 
 	local author = msg.author
-	-- if author.avatar then return end
 
 	local content = msg.content
-	for _, filter in ipairs(filters) do
+	for _, filter in ipairs(nsfwFilters) do
 		if content:find(filter, 1, true) then
 			if not notified[author.id] then -- notify on first message, but do not delete it
 				local log = msg.guild:getChannel(DEVS)
@@ -89,12 +61,9 @@ local function lewd(msg)
 						local now = Date()
 						local notice = log:sendf(
 							'nsfw bot detected: %s in %s.\n - Joined: `%s` (%s ago)\n - Created: `%s` (%s ago)',
-							author.mentionString,
-							msg.channel.mentionString,
-							joined:toISO('T', 'Z'),
-							(now - joined):toString(),
-							created:toISO('T', 'Z'),
-							(now - created):toString()
+							author.mentionString, msg.channel.mentionString,
+							joined:toISO('T', 'Z'), (now - joined):toString(),
+							created:toISO('T', 'Z'), (now - created):toString()
 						)
 						if notice then
 							notified[author.id] = true
@@ -110,15 +79,18 @@ local function lewd(msg)
 end
 
 return function(msg)
+
 	local channel = msg.channel
 	local guild = channel.guild
-	local me = guild.me
-	if me:hasPermission(channel, 'manageMessages') then
-		if lewd(msg) then
+	local bot = guild.me
+
+	if bot:hasPermission(channel, 'manageMessages') then
+		if lewd(msg) then -- detect nsfw bot
 			return msg:delete()
 		end
-		if star(msg) then
+		if star(msg) then -- github star spam
 			return msg:delete()
 		end
 	end
+
 end
