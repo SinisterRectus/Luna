@@ -40,6 +40,14 @@ local nsfwFilters = {
 	'viewc.site',
 }
 
+local function isNSFW(content)
+	for _, filter in ipairs(nsfwFilters) do
+		if content:find(filter, 1, true) then
+			return true
+		end
+	end
+end
+
 local notified = {}
 
 local DEVS = '381886868708655104'-- DAPI #devs
@@ -82,21 +90,22 @@ local maybeBan = {}
 
 local function nsfwShouldBan(msg)
 
-	local member = msg.guild:getMember(msg.author)
+	if isNSFW(msg.content) then
 
-	if not member then return end -- member not be found
-	if member.avatar then return end -- ignore members with an avatar
-	if #member.roles > 0 then return end -- ignore members with a role
+		local member = msg.guild:getMember(msg.author)
 
-	for _, filter in ipairs(nsfwFilters) do  -- check for the lewd urls
-		if msg.content:find(filter, 1, true) then
-			if maybeBan[member.id] then -- trigger on the second message
-				maybeBan[member.id] = nil
-				return true
-			else -- wait for a second message before banning
-				maybeBan[member.id] = true
-			end
+		if not member then return end -- member not be found
+		if member.avatar then return end -- ignore members with an avatar
+		if #member.roles > 0 then return end -- ignore members with a role
+
+		if maybeBan[member.id] then -- trigger on the second message
+			maybeBan[member.id] = nil
+			return true
+		else -- wait for a second message before banning
+			maybeBan[member.id] = true
+			return false
 		end
+
 	end
 
 end
