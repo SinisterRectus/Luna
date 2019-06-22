@@ -118,7 +118,7 @@ return function(msg)
 
 	-- if bot:hasPermission('banMembers') then
 	-- 	if nsfwShouldBan(msg) then
-	-- 		return guild:banMember(msg.author, 'nsfw bot', 7)
+	-- 		return guild:banUser(msg.author, 'nsfw bot', 7)
 	-- 	end
 	-- end
 
