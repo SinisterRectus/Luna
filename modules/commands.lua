@@ -1,37 +1,32 @@
 local discordia = require('discordia')
 local pp = require('pretty-print')
 local fs = require('fs')
-local timer = require('timer')
-local pathJoin = require('pathJoin')
 
 local random, max = math.random, math.max
 local f, upper = string.format, string.upper
 local insert, concat, sort = table.insert, table.concat, table.sort
-local wrap = coroutine.wrap
 
-discordia.extensions()
-
-local clamp, round = math.clamp, math.round -- luacheck: ignore
+local clamp = math.clamp -- luacheck: ignore
 local pack = table.pack -- luacheck: ignore
 
-local setTimeout = timer.setTimeout
 local dump = pp.dump
 
-local actionType = discordia.enums.actionType
 local Date = discordia.Date
 local Time = discordia.Time
 
-local function searchMember(msg, arg)
+local function searchMember(msg, query)
+
+	if not query then return end
 
 	local guild = msg.guild
 	local members = guild.members
 	local user = msg.mentionedUsers.first
 
-	local member = user and guild:getMember(user) or members:get(arg)
+	local member = user and guild:getMember(user) or members:get(query) -- try mentioned user or cache lookup by id
 	if member then return member end
 
-	if arg:find('#', 1, true) then
-		local username, discriminator = arg:match('(.*)#(%d+)')
+	if query:find('#', 1, true) then -- try username#discriminator combination
+		local username, discriminator = query:match('(.*)#(%d+)')
 		member = members:find(function(m) return m.username == username and m.discriminator == discriminator end)
 		if member then
 			return member
@@ -39,11 +34,11 @@ local function searchMember(msg, arg)
 	end
 
 	local distance = math.huge
-	local lowered = arg:lower()
+	local lowered = query:lower()
 
 	for m in members:iter() do
 		if m.nickname and m.nickname:lower():find(lowered, 1, true) then
-			local d = m.nickname:levenshtein(arg)
+			local d = m.nickname:levenshtein(query)
 			if d == 0 then
 				return m
 			elseif d < distance then
@@ -52,7 +47,7 @@ local function searchMember(msg, arg)
 			end
 		end
 		if m.username:lower():find(lowered, 1, true) then
-			local d = m.username:levenshtein(arg)
+			local d = m.username:levenshtein(query)
 			if d == 0 then
 				return m
 			elseif d < distance then
@@ -65,7 +60,7 @@ local function searchMember(msg, arg)
 	if member then
 		return member
 	else
-		return nil, f('No member found for: `%s`', arg)
+		return nil, f('No member found for: `%s`', query)
 	end
 
 end
@@ -81,18 +76,17 @@ end
 local cmds = setmetatable({}, {__call = function(self, msg)
 
 	local cmd, arg = parseContent(msg.content)
-
 	if not self[cmd] then return end
 
 	if msg.author ~= msg.client.owner then
-		print(msg.author.username, cmd)
+		print(msg.author.username, cmd) -- TODO: better command use logging
 	end
 
-	local success, content, code = pcall(self[cmd], arg, msg)
+	local success, content = pcall(self[cmd][1], arg, msg)
 
 	local reply, err
 
-	if success then
+	if success then -- command ran successfully
 
 		if type(content) == 'string' then
 			if #content > 1900 then
@@ -102,25 +96,15 @@ local cmds = setmetatable({}, {__call = function(self, msg)
 					code = true,
 				}
 			elseif #content > 0 then
-				if code then
-					reply, err = msg:reply{content = content, code = code}
-				else
-					reply, err = msg:reply(content)
-				end
+				reply, err = msg:reply(content)
 			end
 		elseif type(content) == 'table' then
-			reply, err = msg:reply(content)
+				reply, err = msg:reply(content) -- TODO: validation for tabular content
 		end
 
-	else
+	else -- command produced an error, try to send it as a message
 
 		reply = msg:reply {content = content,	code = 'lua'}
-		if reply then
-			local c = msg.channel
-			if c.guild.me:hasPermission(c, 'manageMessages') then
-				return setTimeout(7000, wrap(c.bulkDelete), c, {msg, reply})
-			end
-		end
 
 	end
 
@@ -130,272 +114,37 @@ local cmds = setmetatable({}, {__call = function(self, msg)
 
 end})
 
-local classDocs = {}
-local fieldDocs = {}
-
-do -- DOCS LOADER --
-
-	local docs = {}
-
-	local pathjoin = require('pathjoin')
-	local pathJoin = pathjoin.pathJoin
-
-	local function scan(dir)
-		for fileName, fileType in fs.scandirSync(dir) do
-			local path = pathJoin(dir, fileName)
-			if fileType == 'file' then
-				coroutine.yield(path)
-			else
-				scan(path)
-			end
-		end
+cmds['help'] = {function()
+	local buf = {}
+	for k, v in pairs(cmds) do
+		insert(buf, f('%s - %s', k, v[2]))
 	end
+	sort(buf)
+	return concat(buf, '\n')
+end, 'This help command.'}
 
-	local function checkType(docstring, token)
-		return docstring:find(token) == 1
-	end
-
-	local function match(s, pattern) -- only useful for one return value
-		return assert(s:match(pattern), s)
-	end
-
-
-	for file in coroutine.wrap(function() scan('/home/sinister/luna/deps/discordia') end) do
-
-		local d = assert(fs.readFileSync(file))
-
-		local class = {
-			methods = {},
-			statics = {},
-			properties = {},
-			parents = {},
-		}
-
-		for s in d:gmatch('--%[=%[%s*(.-)%s*%]=%]') do
-
-			if checkType(s, '@i?c') then
-
-				class.name = match(s, '@i?c (%w+)')
-				class.userInitialized = checkType(s, '@ic')
-				for parent in s:gmatch('x (%w+)') do
-					insert(class.parents, parent)
-				end
-				class.desc = match(s, '@d (.+)'):gsub('\r?\n', ' ')
-				class.parameters = {}
-				for optional, paramName, paramType in s:gmatch('@(o?)p ([%w%p]+)%s+([%w%p]+)') do
-					insert(class.parameters, {paramName, paramType, optional == 'o'})
-				end
-
-			elseif checkType(s, '@s?m') then
-
-				local method = {parameters = {}}
-				method.name = match(s, '@s?m ([%w%p]+)')
-				for optional, paramName, paramType in s:gmatch('@(o?)p ([%w%p]+)%s+([%w%p]+)') do
-					insert(method.parameters, {paramName, paramType, optional == 'o'})
-				end
-				method.returnType = match(s, '@r ([%w%p]+)')
-				method.desc = match(s, '@d (.+)'):gsub('\r?\n', ' ')
-				insert(checkType(s, '@sm') and class.statics or class.methods, method)
-
-			elseif checkType(s, '@p') then
-
-				local propertyName, propertyType, propertyDesc = s:match('@p (%w+)%s+([%w%p]+)%s+(.+)')
-				assert(propertyName, s); assert(propertyType, s); assert(propertyDesc, s)
-				propertyDesc = propertyDesc:gsub('\r?\n', ' ')
-				insert(class.properties, {
-					name = propertyName,
-					type = propertyType,
-					desc = propertyDesc,
-				})
-
-			end
-
-		end
-
-		if class.name then
-			docs[class.name] = class
-		end
-
-	end
-
-	local function loadClass(class, output)
-		for _, v in ipairs(class.properties) do
-			insert(output.properties, v.name)
-		end
-		for _, v in ipairs(class.statics) do
-			insert(output.statics, v.name)
-		end
-		for _, v in ipairs(class.methods) do
-			insert(output.methods, v.name)
-		end
-	end
-
-	local function loadFields(class, output)
-
-		local url = 'https://github.com/SinisterRectus/Discordia/wiki/' .. class.name
-
-		for _, v in ipairs(class.properties) do
-			output[v.name] = {
-				embed = {
-					title = class.name .. '.' .. v.name,
-					url = url,
-					description = v.desc,
-				}
-			}
-		end
-
-		for _, v in ipairs(class.statics) do -- TODO: returns and parameters
-			output[v.name] = {
-				embed = {
-					title = class.name .. '.' .. v.name .. '()',
-					url = url,
-					description = v.desc,
-				}
-			}
-		end
-
-		for _, v in ipairs(class.methods) do -- TODO: returns and parameters
-			output[v.name] = {
-				embed = {
-					title = class.name .. ':' .. v.name .. '()',
-					url = url,
-					description = v.desc,
-				}
-			}
-		end
-
-	end
-
-	for className, class in pairs(docs) do
-
-		fieldDocs[className] = {}
-
-		local title = className
-		if next(class.parents) then
-			title = title .. ' : ' .. concat(class.parents, ', ')
-		end
-		local tbl = {properties = {}, methods = {}, statics = {}}
-		for _, name in ipairs(class.parents) do
-			loadClass(docs[name], tbl)
-			loadFields(docs[name], fieldDocs[className])
-		end
-		loadClass(class, tbl)
-		loadFields(class, fieldDocs[className])
-
-		local fields = {}
-		if next(tbl.properties) then
-			insert(fields, {name = 'Properties', value = concat(tbl.properties, ', ')})
-		end
-		if next(tbl.statics) then
-			insert(fields, {name = 'Static Methods', value = concat(tbl.statics, ', ')})
-		end
-		if next(tbl.methods) then
-			insert(fields, {name = 'Methods', value = concat(tbl.methods, ', ')})
-		end
-
-		local url = 'https://github.com/SinisterRectus/Discordia/wiki/' .. className
-
-		classDocs[className] = {
-			embed = {
-				title = title,
-				url = url,
-				description = class.desc,
-				fields = fields,
-			}
-		}
-
-
-	end
-
-end -- DOCS LOADER --
-
-cmds['docs'] = function(arg)
-
-	if not arg then return end -- TODO: handle no arg
-	arg = arg:lower()
-
-	local queries = {}
-	for query in arg:gmatch('[%w_]+') do
-		insert(queries, query)
-	end
-
-	-- try all combinations of "a b" arguments
-	for n = 1, #queries do
-
-		local a = {}
-		for i = 1, n do
-			insert(a, queries[i])
-		end
-		local b = {}
-		for i = n + 1, #queries do
-			insert(b, queries[i])
-		end
-
-		a = concat(a)
-		b = concat(b)
-
-		if #b > 0 then
-
-			-- TODO
-			-- fuzzy match "a" with class and match "b" with field (multiple results)
-			-- match "a" with class and fuzzy match "b" with field (multiple results)
-			-- fuzzy match "a" with class and fuzzy match "b" with field (multiple results)
-			-- fuzzy match "a b" with class (multiple results)
-			-- fuzzy match "a b" with field (multiple results)
-
-			-- match "a" with class and match "b" with field
-			for className, v in pairs(fieldDocs) do
-				if className:lower() == a then
-					for fieldName, content in pairs(v) do
-						if fieldName:lower() == b then
-							return content
-						end
-					end
-				end
-			end
-
-		else
-
-			-- TODO
-			-- match "arg" with field (multiple results)
-			-- fuzzy match "arg" with class (multiple results)
-			-- fuzzy match "arg" with field (multiple results)
-
-			-- match "a" with class
-			for k, v in pairs(classDocs) do
-				if k:lower() == a then
-					return v
-				end
-			end
-
-		end
-
-	end
-
-end
-
-cmds['time'] = function()
+cmds['time'] = {function()
 	return {embed = {description = Date():toISO(' ', ' UTC')}}
-end
+end, 'Provides the current time in an abbreviated UTC format.'}
 
-cmds['roll'] = function(arg)
-	local n = clamp(tonumber(arg) or 6, 3, 20)
+cmds['roll'] = {function(arg)
+	local n = tonumber(arg) or 6
 	return {
 		embed = {
-			description = f('You roll a %i-sided die. It lands on %i.', n, random(1, n))
+			description = f('You roll a math.random(%i). It returns %i.', n, random(n))
 		}
 	}
-end
+end, 'Provides a random number.'}
 
-cmds['flip'] = function()
+cmds['flip'] = {function()
 	return {
 		embed = {
 			description = f('You flip a coin. It lands on %s.', random(2) == 1 and 'heads' or 'tails')
 		}
 	}
-end
+end, 'Flips a coin.'}
 
-cmds['whois'] = function(arg, msg)
+cmds['whois'] = {function(arg, msg)
 
 	local m, err = searchMember(msg, arg)
 	if not m then
@@ -419,9 +168,9 @@ cmds['whois'] = function(arg, msg)
 		}
 	}
 
-end
+end, 'Provides information about a guild member.'}
 
-cmds['avatar'] = function(arg, msg)
+cmds['avatar'] = {function(arg, msg)
 	if not arg then
 		return {embed = {image = {url = msg.author.avatarURL}}}
 	else
@@ -431,11 +180,11 @@ cmds['avatar'] = function(arg, msg)
 		end
 		return {embed = {image = {url = member.avatarURL}, description = member.mentionString}}
 	end
-end
+end, 'Provides the avatar of a guild member.'}
 
-cmds['icon'] = function(_, msg)
+cmds['icon'] = {function(_, msg)
 	return {embed = {image = {url = msg.guild.iconURL}}}
-end
+end, 'Provides the guild icon.'}
 
 local function isOnline(member)
 	return member.status ~= 'offline'
@@ -445,7 +194,7 @@ local function hasColor(role)
 	return role.color > 0
 end
 
-cmds['serverinfo'] = function(_, msg)
+cmds['serverinfo'] = {function(_, msg)
 
 	local guild = msg.guild
 	local owner = guild.owner
@@ -468,9 +217,9 @@ cmds['serverinfo'] = function(_, msg)
 		}
 	}
 
-end
+end, 'Provides information about the guild.'}
 
-cmds['color'] = function(arg)
+cmds['color'] = {function(arg)
 	local c = discordia.Color(tonumber(arg))
 	return {
 		embed = {
@@ -484,9 +233,9 @@ cmds['color'] = function(arg)
 			}
 		}
 	}
-end
+end, 'Provides some information about a provided color.'}
 
-cmds['colors'] = function(_, msg)
+cmds['colors'] = {function(_, msg)
 
 	local roles = msg.guild.roles:toArray('position', hasColor)
 
@@ -509,9 +258,9 @@ cmds['colors'] = function(_, msg)
 		insert(ret, row)
 	end
 
-	return concat(ret, '\n'), true
+	return {content = concat(ret, '\n'), code = true}
 
-end
+end, 'Shows the colors of all of the colored roles in the guild.'}
 
 local function printLine(...)
 	local ret = {}
@@ -529,7 +278,7 @@ local function prettyLine(...)
 	return concat(ret, '\t')
 end
 
-cmds['poop'] = function(arg, msg)
+cmds['poop'] = {function(arg, msg)
 
 	local guild = msg.guild
 
@@ -548,14 +297,14 @@ cmds['poop'] = function(arg, msg)
 		end
 	end
 
-end
+end, 'Moderator only. Changes a nickname to a poop emoji.'}
 
 local sandbox = setmetatable({
 	require = require,
 	discordia = discordia,
 }, {__index = _G})
 
-cmds['lua'] = function(arg, msg)
+cmds['lua'] = {function(arg, msg)
 
 	if not arg then return end
 
@@ -584,17 +333,18 @@ cmds['lua'] = function(arg, msg)
 		insert(lines, concat(res, '\t'))
 	end
 
-	return concat(lines, '\n'), 'lua'
+	return {content = concat(lines, '\n'), code = 'lua'}
 
-end
+end, 'Bot owner only. Executes Lua code.'}
 
 local enum1 = {online = 1, idle = 2, dnd = 3, offline = 4}
 local enum2 = {'Online', 'Idle', 'Do Not Disturb', 'Offline'}
 
 local DAPI = '81384788765712384'
 local DISCORDIA_SUBS = '238388552663171072'
+local BOOSTER_COLOR = 0xF47FFF
 
-cmds['subs'] = function(_, msg)
+cmds['subs'] = {function(_, msg)
 
 	local guild = msg.client:getGuild(DAPI)
 	if not guild then return end
@@ -624,13 +374,40 @@ cmds['subs'] = function(_, msg)
 		}
 	}
 
-end
+end, 'Shows all subscribers to the Discordia news role.'}
 
-cmds['lenny'] = function()
+cmds['boosters'] = {function(_, msg)
+
+	local guild = msg.guild
+
+	local members = {}
+	for member in guild.members:findAll(function(m) return m.premiumSince end) do
+		insert(members, {member.tag, member.premiumSince})
+	end
+	sort(members, function(a, b) return a[2] < b[2] end)
+
+	local desc = {}
+	local now = Date()
+	for _, v in ipairs(members) do
+		local days = (now - Date.fromISO(v[2]))
+		insert(desc, f('%s - %.2f days', v[1], days:toDays()))
+	end
+
+	return {
+		embed = {
+			title = guild.name .. ' Boosters',
+			description = concat(desc, '\n'),
+			color = BOOSTER_COLOR,
+		}
+	}
+
+end, 'Shows all current guild boosters.'}
+
+cmds['lenny'] = {function()
 	return '( ͡° ͜ʖ ͡°)'
-end
+end, '( ͡° ͜ʖ ͡°)'}
 
-cmds['clean'] = function(arg, msg)
+cmds['clean'] = {function(arg, msg)
 	if msg.author == msg.client.owner and msg.guild.me:hasPermission(msg.channel, 'manageMessages') then
 		if not tonumber(arg) then return end
 		local messages = msg.channel:getMessagesAfter(arg, 100)
@@ -638,226 +415,14 @@ cmds['clean'] = function(arg, msg)
 			return msg.channel:bulkDelete(messages)
 		end
 	end
-end
+end, 'Bot owner only. Cleans chat messages after a specific ID.'}
 
-cmds['block'] = function(arg, msg)
-	if msg.author == msg.client.owner and msg.guild.me:hasPermission(msg.channel, 'manageRoles') then
-		local member, err = searchMember(msg, arg)
-		if not member then return err end
-		local o = msg.channel:getPermissionOverwriteFor(member)
-		if o and o:denyPermissions('sendMessages') then
-			return f('⛔ %s (%s) blocked', member.name, member.id), true
-		end
-	end
-end
-
-cmds['unblock'] = function(arg, msg)
-	if msg.author == msg.client.owner and msg.guild.me:hasPermission(msg.channel, 'manageRoles') then
-		local member, err = searchMember(msg, arg)
-		if not member then return err end
-		local o = msg.channel:getPermissionOverwriteFor(member)
-		if o and o:clearPermissions('sendMessages') then
-			return f('✅ %s (%s) unblocked', member.name, member.id), true
-		end
-	end
-end
-
-local function getBestChannel(guild, arg)
-	local channelName = arg and arg:match('in:%s-([_%w]+)')
-	if channelName then
-		channelName = channelName:lower()
-		local bestDistance, bestChannel = math.huge, nil
-		for channel in guild.textChannels:iter() do
-			if channel.name:lower():find(channelName) then
-				local distance = channel.name:levenshtein(channelName)
-				if distance < bestDistance then
-					bestChannel = channel
-					bestDistance = distance
-				end
-			end
-		end
-		return bestChannel
-	end
-end
-
-cmds['stats'] = function(arg, msg)
-
-	local db = discordia.storage.db
-	if not db then return end
-
-	local c = getBestChannel(msg.guild, arg) or msg.channel
-	local u = msg.mentionedUsers.first or msg.author
-
-	local sw = discordia.Stopwatch()
-	local authorStats = db:getAuthorStats(c, u)
-	local channelStats = db:getChannelStats(c)
-	if not authorStats or not channelStats then
-		return f('#%s is not indexed!', c.name), true
-	end
-	local t = sw.milliseconds
-
-	local fields = {}
-
-	for i, v in ipairs(authorStats) do
-		local n = tonumber(v[2])
-		local m = tonumber(channelStats[i][2])
-		if n and m then
-			insert(fields, {
-				name = f('%s (%i)', v[1], m),
-				value = f('%i (%.3f%%)', n, 100 * n / m),
-				inline = true
-			})
-		end
-	end
-
-	local authorCount = db:getAuthorCount(c)
-	local days = (discordia.Date() - discordia.Date.fromSnowflake(c.id)):toDays()
-
-	return {
-		embed = {
-			title = f('Author Statistics for %s in #%s', u.name, c.name),
-			description = f('%i authors, %i days', authorCount, days),
-			fields = fields,
-			thumbnail = {url = u.avatarURL},
-			footer = {text = f('Queried in %.3f milliseconds', t)},
-		}
-	}
-
-end
-
-cmds['top'] = function(arg, msg)
-
-	local db = discordia.storage.db
-	if not db then return end
-
-	local limit = tonumber(arg and arg:match('limit:(%d+)')) or 3
-	local c = getBestChannel(msg.guild, arg) or msg.channel
-
-	local sw = discordia.Stopwatch()
-	local channelTopStats = db:getChannelTopStats(c, limit)
-	local channelStats = db:getChannelStats(c)
-	if not channelTopStats then
-		return f('#%s is not indexed!', c.name), true
-	end
-	local t = sw.milliseconds
-
-	local fields = {}
-	for i, v in ipairs(channelTopStats) do
-		local lines = {}
-		for j, id in ipairs(v[1]) do
-			insert(lines, f('%i. <@%s> %i', j, id, v[2][j]))
-		end
-		insert(fields, {
-			name = f('%s (%i)', v[0][2], channelStats[i][2]),
-			value = concat(lines, '\n'),
-			inline = true
-		})
-	end
-
-	local authorCount = db:getAuthorCount(c)
-	local days = (discordia.Date() - discordia.Date.fromSnowflake(c.id)):toDays()
-
-	return {
-		embed = {
-			title = 'Top Author Rankings for #' .. c.name,
-			description = f('%i authors, %i days', authorCount, days),
-			fields = fields,
-			thumbnail = {url = msg.guild.iconURL or msg.client.user.avatarURL},
-			footer = {text = t .. ' milliseconds'},
-		}
-	}
-
-end
-
-local function extractChange(change)
-	if type(change) == 'table' then
-		if #change == 1 then
-			change = change[1] -- extract a lone object from its array
-		end
-		return change.name or dump(change, nil, true) -- extract a name or everything
-	end
-	return change
-end
-
-local function sorter(a, b)
-	return tonumber(a.id) > tonumber(b.id)
-end
-
-cmds['audit'] = function(arg, msg)
-
-	local guild = msg.guild
-
-	local me = guild:getMember(msg.client.user)
-	if not me or not me:hasPermission('viewAuditLog') then return end
-
-	local author = guild:getMember(msg.author)
-	if not author or not author:hasPermission('viewAuditLog') then return end
-
-	local limit = tonumber(arg)
-	local logs = guild:getAuditLogs {limit = limit and clamp(limit, 1, 20) or 10}
-	if not logs then return end
-
-	logs = logs:toArray()
-	sort(logs, sorter)
-
-	local fields = {}
-
-	for _, log in ipairs(logs) do
-
-		local user = log:getUser()
-		local target = log:getTarget()
-		local changes = log.changes
-		local typ = actionType(log.actionType)
-
-
-		if target then
-			target = target.username or target.name
-		else
-			target = changes and changes.name and (changes.name.old or changes.name.new)
-		end
-
-		local name = {}
-
-		if user then
-			insert(name, user.username)
-		end
-
-		if typ then
-			insert(name, typ)
-		end
-
-		if target then
-			insert(name, target)
-		end
-
-		local value = {'```'}
-		if changes then
-			for k, change in pairs(changes) do
-				local old = extractChange(change.old)
-				local new = extractChange(change.new)
-				insert(value, f('• %s | %s → %s', k, old, new))
-			end
-		end
-
-		local t = Date() - Date.fromSnowflake(log.id)
-		t = Time.fromSeconds(round(t:toSeconds())):toString()
-		insert(value, f('• %s ago', t))
-		insert(value, '```')
-
-		insert(fields, {name = concat(name, ' | '), value = concat(value, '\n')})
-
-	end
-
-	return {embed = {fields = fields}}
-
-end
-
-cmds['joined'] = function(_, msg)
+cmds['joined'] = {function(_, msg)
 
 	local guild = msg.guild
 	local members = {}
 
-	for m in msg.channel:getMessages(10):iter() do
+	for m in msg.channel:getMessages(100):iter() do
 		local member = guild:getMember(m.author)
 		if member.joinedAt then
 			members[member] = true
@@ -873,7 +438,8 @@ cmds['joined'] = function(_, msg)
 	local fields = {}
 
 	local now = Date()
-	for _, v in ipairs(sorted) do
+	for i = 1, math.min(#sorted, 5) do
+		local v = sorted[i]
 		local seconds = Date.parseISO(v[1])
 		local t = now - Date(seconds)
 		insert(fields, {name = v[2], value = t:toString() .. ' ago'})
@@ -883,9 +449,9 @@ cmds['joined'] = function(_, msg)
 		embed = {fields = fields}
 	}
 
-end
+end, 'Shows recently joined members based on recent message authors.'}
 
-cmds['discrims'] = function(arg, msg)
+cmds['discrims'] = {function(arg, msg)
 
 	local counts = setmetatable({}, {__index = function() return 0 end})
 
@@ -912,9 +478,9 @@ cmds['discrims'] = function(arg, msg)
 			insert(content, f(fmt, i, d[1], d[2]))
 		end
 	end
-	return concat(content, '\n'), true
+	return {content = concat(content, '\n'), code = true}
 
-end
+end, 'Shows the top discriminators in use for the guild.'}
 
 local function spotifyActivity(m)
 	return m.activity and m.activity.name == 'Spotify' and m.activity.type == 2
@@ -968,7 +534,7 @@ local function spotifyEmbed(msg, what, listeners, counts, limit)
 
 end
 
-cmds['artists'] = function(arg, msg)
+cmds['artists'] = {function(arg, msg)
 
 	local listeners = 0
 	local counts = {}
@@ -985,9 +551,9 @@ cmds['artists'] = function(arg, msg)
 
 	return spotifyEmbed(msg, 'Artists', listeners, counts, arg)
 
-end
+end, 'Shows common artists according to Spotify statuses.'}
 
-cmds['albums'] = function(arg, msg)
+cmds['albums'] = {function(arg, msg)
 
 	local listeners = 0
 	local counts = {}
@@ -1004,9 +570,9 @@ cmds['albums'] = function(arg, msg)
 
 	return spotifyEmbed(msg, 'Albums', listeners, counts, arg)
 
-end
+end, 'Shows common albums according to Spotify statuses.'}
 
-cmds['tracks'] = function(arg, msg)
+cmds['tracks'] = {function(arg, msg)
 
 	local listeners = 0
 	local counts = {}
@@ -1023,7 +589,7 @@ cmds['tracks'] = function(arg, msg)
 
 	return spotifyEmbed(msg, 'Tracks', listeners, counts, arg)
 
-end
+end, 'Shows common tracks according to Spotify statuses.'}
 
 local coverCache = {}
 
@@ -1039,7 +605,7 @@ local function getAlbumCover(id)
 	end
 end
 
-cmds['listening'] = function(arg, msg)
+cmds['listening'] = {function(arg, msg)
 
 	local member = arg and searchMember(msg, arg) or msg.guild:getMember(msg.author)
 	if not member then return end
@@ -1109,11 +675,11 @@ cmds['listening'] = function(arg, msg)
 
 	end
 
-end
+end, 'Shows what a member is listening too according to a Spotify status.'}
 
 local http = require('coro-http')
 
-cmds['steal'] = function(arg, msg)
+cmds['steal'] = {function(arg, msg)
 
 	if not arg then return end
 	if msg.author ~= msg.client.owner then return end
@@ -1163,21 +729,11 @@ cmds['steal'] = function(arg, msg)
 		end
 	end
 
-end
+end, 'Bot owner only. Steals an emoji.'}
 
-local DAPI_PARTNER_DATE = discordia.Date.fromSnowflake('261716079448031242')
+cmds['emojify'] = {function(arg, msg)
 
-cmds['splash'] = function(_, msg)
-	if msg.guild.id ~= DAPI then return end
-	if msg.guild.splash then
-		return msg.guild.splashURL
-	else
-		local days = (discordia.Date() - DAPI_PARTNER_DATE):toDays()
-		return f('Days without a guild splash: %i', days)
-	end
-end
-
-cmds['emojify'] = function(arg, msg)
+	if msg.author ~= msg.client.owner then return end
 
 	local member = searchMember(msg, arg)
 	if not member then return end
@@ -1190,79 +746,210 @@ cmds['emojify'] = function(arg, msg)
 			if res.code == 200 then
 				local filename = f('temp.%s', ext)
 				fs.writeFileSync(filename, data) -- hack for now
-				local emoji = guild:createEmoji(member.username, filename)
+				local emoji = assert(guild:createEmoji(member.username, filename))
 				-- timer.setTimeout(5000, coroutine.wrap(emoji.delete), emoji)
-				if emoji then
-					return {mention = emoji}
-				end
+				return {mention = emoji}
 			end
 		end
 	end
 
-end
+end, 'Bot owner only. Converts a member avatar into an emoji.'}
 
-local DAPI_GAMING_GUILD = '513126885279137792'
-local gamingRoles = { -- channel = role
-	['514872890613825544'] = '513733703243923460', -- clashers,
-	['514879656717975569'] = '514922820539514901', -- skribblers,
-}
-
-cmds['sub'] = function(_, msg)
-
-	if msg.guild.id ~= DAPI_GAMING_GUILD then return end
-	local member = msg.guild:getMember(msg.author)
-	if not member then return end
-
-	local role = gamingRoles[msg.channel.id]
-	if role and member:addRole(role) then
-		return msg:addReaction('✅')
-	end
-
-end
-
-cmds['unsub'] = function(_, msg)
-
-	if msg.guild.id ~= DAPI_GAMING_GUILD then return end
-	local member = msg.guild:getMember(msg.author)
-	if not member then return end
-
-	local role = gamingRoles[msg.channel.id]
-	if role and member:removeRole(role) then
-		return msg:addReaction('✅')
-	end
-
-end
-
-cmds['addemoji'] = function(arg, msg)
-
-	if msg.author ~= msg.client.owner then return end
-
-	local args = arg:split('%s+')
-	local name, url = args[1], args[2]
-	if not name or not url then return end
-
-	local res, data = http.request('GET', url)
-	if res.code == 200 then
-		local filename = table.remove(pathJoin.splitPath(url))
-		fs.writeFileSync(filename, data) -- hack for now
-		local emoji = msg.guild:createEmoji(name, filename)
-		if emoji then
-			return {mention = emoji}
-		end
-	end
-
-end
-
-cmds['rate'] = function(arg, msg)
+cmds['rate'] = {function(arg, msg)
 
 	local n = arg and clamp(arg, 2, 100) or 100
 	local m = msg.channel:getMessages(n):toArray('id')
-	local t = discordia.Date.fromSnowflake(m[1].id) - discordia.Date.fromSnowflake(m[#m].id)
+	n = #m
 
-	t = t:toMinutes()
+	local t = Date.fromSnowflake(m[1].id) - Date.fromSnowflake(m[n].id)
 
-	return f('Current message rate: %g messages per minute (measured for the previous %i messages)', #m / t, #m)
+	local content = '%s message rate: **%g** per minute, or 1 every **%g** seconds, measured for the previous **%i**'
 
+	return f(content, msg.channel.mentionString, n / t:toMinutes(), t:toSeconds() / n, n)
+
+end, 'Shows the current rate of channel messages.'}
+
+local function canDelete(msg)
+	return msg.author == msg.client.user
 end
+
+local function canBulkDelete(msg)
+	if msg.id < (Date() - Time.fromWeeks(2)):toSnowflake() then return end
+	local cmd = parseContent(msg.content)
+	return msg.author == msg.client.user or cmds[cmd]
+end
+
+cmds['cleanup'] = {function(_, msg)
+
+	local c = msg.channel
+	local member = c.guild:getMember(msg.author)
+	if not member then return end
+	if not member:hasPermission(c, 'manageMessages') then return end
+
+	if c.guild.me:hasPermission(c, 'manageMessages') then
+		local messages = {}
+		for message in c:getMessages(100):findAll(canBulkDelete) do
+			insert(messages, message)
+		end
+		c:bulkDelete(messages)
+	else
+		for message in c:getMessages(100):findAll(canDelete) do
+			message:delete()
+		end
+	end
+
+end, 'Moderator only. Removes recently used commands.'}
+
+local json = require('json')
+
+cmds['msg'] = {function(arg, msg)
+
+	local data = msg.client._api:getChannelMessage(msg.channel.id, arg)
+
+	return {
+		content = json.encode(data, {indent = true}),
+		code = 'json',
+	}
+
+end, 'Provides the raw JSON for a message.'}
+
+cmds['ping'] = {function()
+	return 'No.'
+end, 'Ping command.'}
+
+cmds['members'] = {function(arg, msg)
+
+	local guild = msg.guild
+	local lowered = arg:lower()
+
+	local titles = {
+		'Matched Usernames',
+		'Similar Usernames',
+		'Matched Nicknames',
+		'Similar Nicknames',
+	}
+
+	local matches = {}
+	for i = 1, 6 do
+		matches[i] = {}
+	end
+
+	local n = 5
+	local usernameDistances = {}
+	local nicknameDistances = {}
+
+	for member in guild.members:iter() do
+
+		local username = member.username
+		local loweredUsername = username:lower()
+		if loweredUsername:find(lowered) then
+			insert(matches[1], member)
+		else
+			insert(matches[2], member)
+		end
+		usernameDistances[member] = username:levenshtein(arg)
+
+		local nickname = member.nickname
+		if nickname then
+			local loweredNickname = nickname:lower()
+			if loweredNickname:find(lowered) then
+				insert(matches[3], member)
+			else
+				insert(matches[4], member)
+			end
+			nicknameDistances[member] = nickname:levenshtein(arg)
+		end
+
+	end
+
+	sort(matches[1], function (a, b)
+		return usernameDistances[a] < usernameDistances[b]
+	end)
+
+	sort(matches[2], function (a, b)
+		return usernameDistances[a] < usernameDistances[b]
+	end)
+
+	sort(matches[3], function (a, b)
+		return nicknameDistances[a] < nicknameDistances[b]
+	end)
+
+	sort(matches[4], function (a, b)
+		return nicknameDistances[a] < nicknameDistances[b]
+	end)
+
+	local fields = {}
+	for i, v in ipairs(matches) do
+		local field = {'```lua'}
+		for j = 1, n do
+			local member = v[j]
+			if v[j] then
+				if member.nickname then
+					insert(field, f('%i. %s#%s (%s)', j, member.username, member.discriminator, member.nickname))
+				else
+					insert(field, f('%i. %s#%s', j, member.username, member.discriminator))
+				end
+				-- insert(field, f('%i. %s', j, member.mentionString))
+			end
+		end
+		if #field > 1 then
+			insert(field, '```')
+			field = {name = f('%s (%i)', titles[i], #v), value = concat(field, '\n')}
+			insert(fields, field)
+		end
+	end
+
+	return {
+		embed = {
+			fields = fields
+		}
+	}
+
+end, 'Shows members that match a specific query.'}
+
+cmds['quotelink'] = {function(_, msg)
+
+	local messages = msg.channel:getMessages():toArray('id')
+	local client = msg.client
+
+	for i = #messages, 1, -1 do
+
+		local m = messages[i]
+		local guildId, channelId, messageId = m.content:match('https://.-%.?discordapp.com/channels/(%d+)/(%d+)/(%d+)')
+
+		if guildId and channelId and messageId then
+
+			local guild = assert(client:getGuild(guildId))
+			local channel = assert(guild:getChannel(channelId))
+			local bot = assert(guild:getMember(client.user))
+
+			assert(bot:hasPermission(channel, 'readMessages'))
+			assert(bot:hasPermission(channel, 'readMessageHistory'))
+
+			local message = assert(channel:getMessage(messageId) or channel:getMessagesAfter(messageId, 1):iter()())
+
+			local member = guild.members:get(message.author.id)
+			local color = member and member:getColor().value or 0
+
+			return {
+				embed = {
+					author = {
+						name = message.author.username,
+						icon_url = message.author.avatarURL,
+					},
+					description = message.content,
+					footer = {
+						text = f('#%s in %s', channel.name, guild.name),
+					},
+					timestamp = message.timestamp,
+					color = color > 0 and color or nil,
+				}
+			}
+
+		end
+
+	end
+
+end, 'Shows the content of the most recent message link.'}
 
 return cmds
