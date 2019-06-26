@@ -116,16 +116,16 @@ return function(msg)
 	local guild = channel.guild
 	local bot = guild.me
 
-	-- if bot:hasPermission('banMembers') then
-	-- 	if nsfwShouldBan(msg) then
-	-- 		return guild:banUser(msg.author, 'nsfw bot', 7)
-	-- 	end
-	-- end
+	if bot:hasPermission('banMembers') then
+		if nsfwShouldBan(msg) then
+			return guild:banUser(msg.author, 'nsfw bot', 7)
+		end
+	end
 
 	if bot:hasPermission(channel, 'manageMessages') then
-		if lewd(msg) then -- detect nsfw bot
-			return msg:delete()
-		end
+		-- if lewd(msg) then -- detect nsfw bot
+		-- 	return msg:delete()
+		-- end
 		if star(msg) then -- github star spam
 			return msg:delete()
 		end
