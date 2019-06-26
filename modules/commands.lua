@@ -1,6 +1,7 @@
 local discordia = require('discordia')
 local pp = require('pretty-print')
 local fs = require('fs')
+local http = require('coro-http')
 
 local random, max = math.random, math.max
 local f, upper = string.format, string.upper
@@ -23,13 +24,18 @@ local function searchMember(msg, query)
 	local user = msg.mentionedUsers.first
 
 	local member = user and guild:getMember(user) or members:get(query) -- try mentioned user or cache lookup by id
-	if member then return member end
+	if member then
+		return member
+	end
 
 	if query:find('#', 1, true) then -- try username#discriminator combination
-		local username, discriminator = query:match('(.*)#(%d+)')
-		member = members:find(function(m) return m.username == username and m.discriminator == discriminator end)
-		if member then
-			return member
+		local username, discriminator = query:match('(.*)#(%d+)$')
+		if username and discriminator then
+			print(username, discriminator)
+			member = members:find(function(m) return m.username == username and m.discriminator == discriminator end)
+			if member then
+				return member
+			end
 		end
 	end
 
@@ -99,7 +105,7 @@ local cmds = setmetatable({}, {__call = function(self, msg)
 				reply, err = msg:reply(content)
 			end
 		elseif type(content) == 'table' then
-				reply, err = msg:reply(content) -- TODO: validation for tabular content
+			reply, err = msg:reply(content) -- TODO: validation for tabular content
 		end
 
 	else -- command produced an error, try to send it as a message
@@ -205,7 +211,7 @@ cmds['serverinfo'] = {function(_, msg)
 			fields = {
 				{name = 'Name', value = guild.name, inline = true},
 				{name = 'ID', value = guild.id, inline = true},
-				{name = 'Owner', value = owner.fullname, inline = true},
+				{name = 'Owner', value = owner.tag, inline = true},
 				{name = 'Created', value = Date.fromSnowflake(guild.id):toISO(' ', ''), inline = true},
 				{name = 'Members', value = guild.members:count(isOnline) .. ' / ' .. guild.totalMemberCount, inline = true},
 				{name = 'Categories', value = tostring(#guild.categories), inline = true},
@@ -325,7 +331,6 @@ cmds['lua'] = {function(arg, msg)
 	if not fn then return error(err) end
 
 	local res = pack(fn())
-
 	if res.n > 0 then
 		for i = 1, res.n do
 			res[i] = tostring(res[i])
@@ -333,7 +338,9 @@ cmds['lua'] = {function(arg, msg)
 		insert(lines, concat(res, '\t'))
 	end
 
-	return {content = concat(lines, '\n'), code = 'lua'}
+	if #lines > 0 then
+		return {content = concat(lines, '\n'), code = 'lua'}
+	end
 
 end, 'Bot owner only. Executes Lua code.'}
 
@@ -598,7 +605,7 @@ local function getAlbumCover(id)
 	if cover then
 		return cover
 	end
-	local res, data = require('coro-http').request("GET", "https://i.scdn.co/image/" .. id)
+	local res, data = http.request("GET", "https://i.scdn.co/image/" .. id)
 	if res.code == 200 then
 		coverCache[id] = data
 		return data
@@ -676,8 +683,6 @@ cmds['listening'] = {function(arg, msg)
 	end
 
 end, 'Shows what a member is listening too according to a Spotify status.'}
-
-local http = require('coro-http')
 
 cmds['steal'] = {function(arg, msg)
 

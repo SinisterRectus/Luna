@@ -37,7 +37,7 @@ end
 
 local function loadModule(path, silent)
 
-	local name = remove(splitPath(path)):match('(.*).lua')
+	local name = remove(splitPath(path)):match('(.*)%.lua')
 	if name == 'init' or name:find('_') == 1 then return end -- ignore init and private files
 
 	local success, err = pcall(function()
