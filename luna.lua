@@ -35,6 +35,10 @@ client:on('messageCreate', function(msg)
 		modules.commands(msg)
 	end
 
+	if modules.acronym then
+		modules.acronym(msg)
+	end
+
 	if modules.antispam then
 		modules.antispam(msg)
 	end
