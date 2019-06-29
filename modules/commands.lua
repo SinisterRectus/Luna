@@ -409,6 +409,7 @@ cmds['boosters'] = {function(_, msg)
 	}
 
 end, 'Shows all current guild boosters.'}
+cmds['dweebs'] = cmds['boosters']
 
 cmds['lenny'] = {function()
 	return '( ͡° ͜ʖ ͡°)'
