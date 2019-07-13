@@ -1059,4 +1059,127 @@ cmds['weather'] = {function(arg)
 
 end, 'Shows the current weather for the provided location.'}
 
+local function markdown(tbl)
+
+	local widths = setmetatable({}, {__index = function() return 0 end})
+
+	for i = 0, #tbl do
+		for j, v in ipairs(tbl[i]) do
+			widths[j] = math.max(widths[j], #v)
+		end
+	end
+
+	local buf = {}
+	local function append(str)
+		return table.insert(buf, str)
+	end
+
+	local m = #tbl[0]
+
+	append('|')
+	for i, v in ipairs(tbl[0]) do
+		append(' ')
+		append(v)
+		local n = widths[i] - #v
+		if n > 0 then
+			append(string.rep(' ', n))
+		end
+		append(' |')
+	end
+	append('\n')
+
+	append('|')
+	for _, n in ipairs(widths) do
+		append(string.rep('-', n))
+		append('--|')
+	end
+	append('\n')
+
+	for _, line in ipairs(tbl) do
+		append('|')
+		for i = 1, m do
+			local v = line[i] or ''
+			append(' ')
+			append(v)
+			local n = widths[i] - #v
+			if n > 0 then
+				append(string.rep(' ', n))
+			end
+			append(' |')
+		end
+		append('\n')
+	end
+
+	return table.concat(buf)
+
+end
+
+cmds['forecast'] = {function(arg)
+
+		local weather, err = getWeather('forecast', {q = arg,	days = 5})
+
+		if not weather then
+			return err
+		end
+
+		local location = weather.location
+
+		local title
+		if location.region and #location.region > 0 then
+			title = f('Forecast for %s, %s, %s', location.name, location.region, location.country)
+		else
+			title = f('Forecast for %s, %s', location.name, location.country)
+		end
+
+		local i = 0
+		local data = {}
+
+		local function add(str, ...)
+			data[i] = data[i] or {}
+			insert(data[i], str:format(...))
+			i = i + 1
+		end
+
+		local function reset()
+			i = 0
+		end
+
+		add('')
+		add('Sunrise')
+		add('Sunset')
+		add('Moonrise')
+		add('Moonset')
+		add('Max Temp (C | F)')
+		add('Avg Temp (C | F)')
+		add('Min Temp (C | F)')
+		add('Max Wind Speed (kph | mph)')
+		add('Total Precip (mm | in)')
+		add('Average Visibility (km | mi)')
+		add('Average Humidity (%%)')
+		add('UV Index')
+		reset()
+
+		local fmt = '%s | %s'
+
+		for _, v in ipairs(weather.forecast.forecastday) do
+			add(v.date)
+			add(v.astro.sunrise)
+			add(v.astro.sunset)
+			add(v.astro.moonrise)
+			add(v.astro.moonset)
+			add(fmt, v.day.maxtemp_c, v.day.maxtemp_f)
+			add(fmt, v.day.avgtemp_c, v.day.avgtemp_f)
+			add(fmt, v.day.mintemp_c, v.day.mintemp_f)
+			add(fmt , v.day.maxwind_kph, v.day.maxwind_mph)
+			add(fmt, v.day.totalprecip_mm, v.day.totalprecip_in)
+			add(fmt, v.day.avgvis_km, v.day.avgvis_miles)
+			add('%s', v.day.avghumidity)
+			add('%s', v.day.uv)
+			reset()
+		end
+
+		return f('%s\n```\n%s\n```', title, markdown(data))
+
+end, 'Shows a weather forecast for the provided location.'}
+
 return cmds
