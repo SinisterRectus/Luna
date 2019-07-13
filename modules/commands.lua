@@ -105,7 +105,17 @@ local cmds = setmetatable({}, {__call = function(self, msg)
 				reply, err = msg:reply(content)
 			end
 		elseif type(content) == 'table' then
-			reply, err = msg:reply(content) -- TODO: validation for tabular content
+			if content.content and #content.content > 1900 then
+				local file = {os.time() .. '.txt', content.content}
+				content.content = 'Content is too large. See attached file.'
+				content.code = true
+				if content.files then
+					insert(content.files, file)
+				else
+					content.files = {file}
+				end
+			end
+			reply, err = msg:reply(content)
 		end
 
 	else -- command produced an error, try to send it as a message
