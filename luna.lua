@@ -1,7 +1,11 @@
 local fs = require('fs')
+local json = require('json')
 local modules = require('./modules')
 local discordia = require('discordia')
 
+local cfg = json.decode(fs.readFileSync('config.json'))
+
+discordia.storage.apixu_key = cfg.apixu_key
 discordia.extensions()
 modules()
 
@@ -52,4 +56,4 @@ client:on('messageDelete', function(message)
 	end
 end)
 
-client:run(fs.readFileSync('token.dat'))
+client:run(cfg.token)

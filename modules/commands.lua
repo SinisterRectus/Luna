@@ -2,6 +2,7 @@ local discordia = require('discordia')
 local pp = require('pretty-print')
 local fs = require('fs')
 local http = require('coro-http')
+local qs = require('querystring')
 
 local random, max = math.random, math.max
 local f, upper = string.format, string.upper
@@ -11,6 +12,7 @@ local clamp = math.clamp -- luacheck: ignore
 local pack = table.pack -- luacheck: ignore
 
 local dump = pp.dump
+local urlencode = qs.urlencode
 
 local Date = discordia.Date
 local Time = discordia.Time
@@ -966,5 +968,100 @@ cmds['quotelink'] = {function(_, msg)
 	end
 
 end, 'Shows the content of the most recent message link.'}
+
+local base = 'http://api.apixu.com/v1'
+local key = discordia.storage.apiux_key
+local apixu = [[
+Apixu.com error: %s
+
+Valid queries:
+
+- Latitude and Longitude (48.8567,2.3508)
+- City Name (Paris)
+- US ZIP code (10001)
+- UK postcode (SW1)
+- Canada postal (G2J)
+- metar:<metar code> (metar:EGLL)
+- iata:<3 digit airport code> (iata:DXB)
+- IP address (100.0.0.1)
+]]
+
+local function getCurrentWeather(q) -- TODO request caching
+
+	local url = f('%s/current.json?key=%s&q=%s', base, key, urlencode(q))
+
+	local res, data = http.request('GET', url)
+
+	data = json.decode(data)
+
+	if res.code < 300 then
+		return data
+	else
+		if data.error then
+			return nil, data.error.message
+		else
+			return nil, res.reason
+		end
+	end
+
+end
+
+cmds['weather'] = {function(arg)
+
+	local weather, err = getCurrentWeather(arg)
+
+	if not weather then
+		return f(apixu, err)
+	end
+
+	local location = weather.location
+	local current = weather.current
+
+	local fields = {}
+	local function add(name, value, ...)
+		insert(fields, {name = name, value = value:format(...), inline = true})
+	end
+
+	add('Coordinates', '%s, %s', location.lat, location.lon)
+	add('Timezone', location.tz_id)
+	add('Local Time', location.localtime)
+	add('Last Updated', current.last_updated)
+	add('Temperature', '%s °C | %s °F', current.temp_c, current.temp_f)
+	add('Feels Like', '%s °C | %s °F', current.feelslike_c, current.feelslike_f)
+	add('Wind Speed', '%s kph | %s mph', current.wind_kph, current.wind_mph)
+	add('Gust Speed', '%s kph | %s mph', current.gust_kph, current.gust_mph)
+	add('Wind Direction', '%s° | %s', current.wind_degree, current.wind_dir)
+	add('Pressure', '%s mbar | %s inHg', current.pressure_mb, current.pressure_in)
+	add('Precipitation', '%s mm | %s in', current.precip_mm, current.precip_in)
+	add('Humidity', '%s%% ', current.humidity)
+	add('Visiblity', '%s km | %s mi', current.vis_km, current.vis_miles)
+	add('Cloud Coverage', '%s%% ', current.cloud)
+	add('UV Index', '%s', current.uv)
+
+	local title
+	if location.region and #location.region > 0 then
+		title = f('Weather for %s, %s, %s', location.name, location.region, location.country)
+	else
+		title = f('Weather for %s, %s', location.name, location.country)
+	end
+
+	local updated = discordia.Time.fromSeconds(location.localtime_epoch - current.last_updated_epoch)
+
+	return {
+		embed = {
+			title = title,
+			description = f('%s, updated %s ago',current.condition.text, updated:toString()),
+			thumbnail = {
+				url = 'https:' .. current.condition.icon,
+			},
+			fields = fields,
+			footer = {
+				text = 'Powered by Apixu.com',
+			},
+			timestamp = current.last_updated,
+		}
+	}
+
+end, 'Shows the current weather for the provided location.'}
 
 return cmds

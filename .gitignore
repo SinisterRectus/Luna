@@ -2,7 +2,8 @@ deps
 luvit
 luvi
 lit
-token.dat
+config.json
 gateway.json
 discordia.log
 luna.db
+temp.*
