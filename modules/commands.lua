@@ -971,26 +971,18 @@ cmds['quotelink'] = {function(_, msg)
 
 end, 'Shows the content of the most recent message link.'}
 
-local base = 'http://api.apixu.com/v1'
-local key = discordia.storage.apiux_key
-local apixu = [[
-Apixu.com error: %s
+local function getWeather(method, query) -- TODO request caching
 
-Valid queries:
+	query.key = discordia.storage.apiux_key
 
-- Latitude and Longitude (48.8567,2.3508)
-- City Name (Paris)
-- US ZIP code (10001)
-- UK postcode (SW1)
-- Canada postal (G2J)
-- metar:<metar code> (metar:EGLL)
-- iata:<3 digit airport code> (iata:DXB)
-- IP address (100.0.0.1)
-]]
-
-local function getCurrentWeather(q) -- TODO request caching
-
-	local url = f('%s/current.json?key=%s&q=%s', base, key, urlencode(q))
+	local url = {f('http://api.apixu.com/v1/%s.json', method)}
+	for k, v in pairs(query) do
+		insert(url, #url == 1 and '?' or '&')
+		insert(url, urlencode(k))
+		insert(url, '=')
+		insert(url, urlencode(v))
+	end
+	url = concat(url)
 
 	local res, data = http.request('GET', url)
 
@@ -999,8 +991,8 @@ local function getCurrentWeather(q) -- TODO request caching
 	if res.code < 300 then
 		return data
 	else
-		if data.error then
-			return nil, data.error.message
+		if data and data.error and data.error.message then
+			return nil, 'Apixu.com error: ' .. data.error.message
 		else
 			return nil, res.reason
 		end
@@ -1010,10 +1002,10 @@ end
 
 cmds['weather'] = {function(arg)
 
-	local weather, err = getCurrentWeather(arg)
+	local weather, err = getWeather('current', {q = arg})
 
 	if not weather then
-		return f(apixu, err)
+		return err
 	end
 
 	local location = weather.location
@@ -1047,12 +1039,13 @@ cmds['weather'] = {function(arg)
 		title = f('Weather for %s, %s', location.name, location.country)
 	end
 
-	local updated = discordia.Time.fromSeconds(location.localtime_epoch - current.last_updated_epoch)
+	local localTime = Date(location.localtime_epoch)
+	local lastUpdated = Date(current.last_updated_epoch)
 
 	return {
 		embed = {
 			title = title,
-			description = f('%s, updated %s ago',current.condition.text, updated:toString()),
+			description = f('%s, updated %s ago',current.condition.text, (localTime - lastUpdated):toString()),
 			thumbnail = {
 				url = 'https:' .. current.condition.icon,
 			},
@@ -1060,7 +1053,7 @@ cmds['weather'] = {function(arg)
 			footer = {
 				text = 'Powered by Apixu.com',
 			},
-			timestamp = current.last_updated,
+			timestamp = lastUpdated:toISO(),
 		}
 	}
 
