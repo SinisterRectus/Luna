@@ -774,7 +774,9 @@ end, 'Bot owner only. Converts a member avatar into an emoji.'}
 
 cmds['rate'] = {function(arg, msg)
 
-	local n = arg and clamp(arg, 2, 100) or 100
+	local n = tonumber(arg)
+	n = n and clamp(arg, 2, 100) or 100
+
 	local m = msg.channel:getMessages(n):toArray('id')
 	n = #m
 
