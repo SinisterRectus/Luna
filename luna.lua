@@ -3,6 +3,7 @@ local modules = require('./modules')
 local discordia = require('discordia')
 
 discordia.extensions()
+modules()
 
 local client = discordia.Client {
 	cacheAllMembers = true,

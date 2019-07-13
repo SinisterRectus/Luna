@@ -70,19 +70,6 @@ local function loadModule(path, silent)
 
 end
 
-local function loadModules(path)
-	for k, v in scandirSync(path) do
-		local joined = pathJoin(path, k)
-		if v == 'file' then
-			if k:find('.lua', -4, true) then
-				loadModule(joined)
-			end
-		else
-			loadModules(joined)
-		end
-	end
-end
-
 local function getFullPath(directory, name)
 	for k, v in scandirSync(directory) do
 		local joined = pathJoin(directory, name)
@@ -100,6 +87,19 @@ end
 
 local dir = module.dir -- luacheck: ignore
 
+local function loadModules(path)
+	for k, v in scandirSync(path) do
+		local joined = pathJoin(path, k)
+		if v == 'file' then
+			if k:find('.lua', -4, true) then
+				loadModule(joined)
+			end
+		else
+			loadModules(joined)
+		end
+	end
+end
+
 _G.process.stdin:on('data', function(data)
 
 	data = data:split('%s+')
@@ -116,6 +116,4 @@ _G.process.stdin:on('data', function(data)
 
 end)
 
-loadModules(dir)
-
-return modules
+return setmetatable(modules, {__call = function() return loadModules(dir)	end})
