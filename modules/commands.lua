@@ -973,7 +973,7 @@ end, 'Shows the content of the most recent message link.'}
 
 local function getWeather(method, query) -- TODO request caching
 
-	query.key = discordia.storage.apiux_key
+	query.key = discordia.storage.apixu_key
 
 	local url = {f('http://api.apixu.com/v1/%s.json', method)}
 	for k, v in pairs(query) do
@@ -985,6 +985,8 @@ local function getWeather(method, query) -- TODO request caching
 	url = concat(url)
 
 	local res, data = http.request('GET', url)
+
+	print(url)
 
 	data = json.decode(data)
 
