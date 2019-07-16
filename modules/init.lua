@@ -1,28 +1,17 @@
 local fs = require('fs') -- luvit built-in library
 local pathjoin = require('pathjoin') -- luvit built-in library
 
-local splitPath = pathjoin.splitPath
 local pathJoin = pathjoin.pathJoin
+local splitPath = pathjoin.splitPath
 local readFileSync = fs.readFileSync
 local scandirSync = fs.scandirSync
 local remove = table.remove
-local format = string.format
+
+local DIR, PATH = module.dir, module.path -- luacheck: ignore
 
 local env = setmetatable({
 	require = require, -- inject luvit's custom require
 }, {__index = _G})
-
-local function isCallable(obj)
-	local t = type(obj)
-	if t == 'function' then
-		return true
-	elseif t == 'table' then
-		local meta = getmetatable(obj)
-		if meta and isCallable(meta.__call) then
-			return true
-		end
-	end
-end
 
 local modules = {}
 
@@ -35,34 +24,18 @@ local function unloadModule(name)
 	end
 end
 
-local function loadModule(path, silent)
+local function loadModule(path, name)
 
-	local name = remove(splitPath(path)):match('(.*)%.lua')
-	if name == 'init' or name:find('_') == 1 then return end -- ignore init and private files
+	if path == PATH then return end -- ignore this file
 
 	local success, err = pcall(function()
-
 		local code = assert(readFileSync(path))
 		local fn = assert(loadstring(code, '@' .. name, 't', env))
-		local module = fn()
-
-		assert(isCallable(module), format('Module %q must be a callable as a function', name))
-
-		modules[name] = function(...)
-			local success2, err2 = pcall(module, ...)
-			if not success2 then
-				print(err2)
-				print(debug.traceback())
-				unloadModule(name) -- TODO: maybe notify bot owner of module error
-			end
-		end
-
+		modules[name] = fn()
 	end)
 
 	if success then
-		if not silent then
-			print('Module loaded: ' .. name)
-		end
+		print('Module loaded: ' .. name)
 	else
 		print('Module not loaded: ' .. name)
 		print(err)
@@ -70,50 +43,32 @@ local function loadModule(path, silent)
 
 end
 
-local function getFullPath(directory, name)
-	for k, v in scandirSync(directory) do
-		local joined = pathJoin(directory, name)
-		if v == 'file' then
-			if k:lower() == name then
-				return joined
-			end
-		else
-			getFullPath(joined)
-		end
-	end
+local function loadModuleByName(name)
+	local path = pathJoin(DIR, name) .. '.lua'
+	return loadModule(path, name)
 end
 
-----
-
-local dir = module.dir -- luacheck: ignore
-
-local function loadModules(path)
-	for k, v in scandirSync(path) do
-		local joined = pathJoin(path, k)
-		if v == 'file' then
-			if k:find('.lua', -4, true) then
-				loadModule(joined)
-			end
-		else
-			loadModules(joined)
-		end
-	end
+local function loadModuleByPath(path)
+	local name = remove(splitPath(path)):match('(.*)%.lua')
+	return loadModule(path, name)
 end
 
 _G.process.stdin:on('data', function(data)
 
 	data = data:split('%s+')
 	if not data[2] then return end
-
 	if data[1] == 'reload' then
-		local path = getFullPath(dir, data[2] .. '.lua')
-		if path then
-			return loadModule(path)
-		end
+		return loadModuleByName(data[2])
 	elseif data[1] == 'unload' then
 		return unloadModule(data[2])
 	end
 
 end)
 
-return setmetatable(modules, {__call = function() return loadModules(dir)	end})
+return setmetatable(modules, {__call = function()
+	for k, v in scandirSync(DIR) do
+		if v == 'file' then
+			loadModuleByPath(pathJoin(DIR, k))
+		end
+	end
+end})
