@@ -37,7 +37,7 @@ client:on('messageCreate', function(msg)
 	end
 
 	if modules.commands then
-		modules.commands(msg)
+		modules.commands.onMessageCreate(msg)
 	end
 
 	if modules.acronym then
@@ -50,10 +50,16 @@ client:on('messageCreate', function(msg)
 
 end)
 
-client:on('messageDelete', function(message)
-	if modules.undelete then
-		modules.undelete(message)
+client:on('messageDelete', function(msg)
+
+	if modules.commands then
+		modules.commands.onMessageDelete(msg)
 	end
+
+	if modules.undelete then
+		modules.undelete(msg)
+	end
+
 end)
 
 client:run(cfg.token)

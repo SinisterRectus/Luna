@@ -81,16 +81,19 @@ local function parseContent(content)
 	return cmd or content, arg
 end
 
-local cmds = setmetatable({}, {__call = function(self, msg)
+local cmds = {}
+local replies = {}
+
+local function onMessageCreate(msg)
 
 	local cmd, arg = parseContent(msg.content)
-	if not self[cmd] then return end
+	if not cmds[cmd] then return end
 
 	if msg.author ~= msg.client.owner then
 		print(msg.author.username, cmd) -- TODO: better command use logging
 	end
 
-	local success, content = pcall(self[cmd][1], arg, msg)
+	local success, content = pcall(cmds[cmd][1], arg, msg)
 
 	local reply, err
 
@@ -126,11 +129,20 @@ local cmds = setmetatable({}, {__call = function(self, msg)
 
 	end
 
-	if err and not reply then
+	if reply then
+		replies[msg.id] = reply
+	else
 		print(err)
 	end
 
-end})
+end
+
+local function onMessageDelete(msg)
+	if replies[msg.id] then
+		replies[msg.id]:delete()
+		replies[msg.id] = nil
+	end
+end
 
 cmds['help'] = {function()
 	local buf = {}
@@ -823,6 +835,8 @@ local json = require('json')
 
 cmds['msg'] = {function(arg, msg)
 
+	if not tonumber(arg) then return end
+
 	local data = msg.client._api:getChannelMessage(msg.channel.id, arg)
 
 	return {
@@ -1028,15 +1042,15 @@ cmds['weather'] = {function(arg)
 		add('Coordinates', '%s, %s', location.lat, location.lon)
 		add('Timezone', location.tz_id)
 		add('Local Time', location.localtime)
-	add('Last Updated', current.last_updated)
-	add('Temperature', '%s °C | %s °F', current.temp_c, current.temp_f)
-	add('Feels Like', '%s °C | %s °F', current.feelslike_c, current.feelslike_f)
-	add('Wind Speed', '%s kph | %s mph', current.wind_kph, current.wind_mph)
-	add('Gust Speed', '%s kph | %s mph', current.gust_kph, current.gust_mph)
-	add('Wind Direction', '%s° | %s', current.wind_degree, current.wind_dir)
-	add('Pressure', '%s mbar | %s inHg', current.pressure_mb, current.pressure_in)
-	add('Precipitation', '%s mm | %s in', current.precip_mm, current.precip_in)
-	add('Humidity', '%s%% ', current.humidity)
+		add('Last Updated', current.last_updated)
+		add('Temperature', '%s °C | %s °F', current.temp_c, current.temp_f)
+		add('Feels Like', '%s °C | %s °F', current.feelslike_c, current.feelslike_f)
+		add('Wind Speed', '%s kph | %s mph', current.wind_kph, current.wind_mph)
+		add('Gust Speed', '%s kph | %s mph', current.gust_kph, current.gust_mph)
+		add('Wind Direction', '%s° | %s', current.wind_degree, current.wind_dir)
+		add('Pressure', '%s mbar | %s inHg', current.pressure_mb, current.pressure_in)
+		add('Precipitation', '%s mm | %s in', current.precip_mm, current.precip_in)
+		add('Humidity', '%s%% ', current.humidity)
 		add('Visiblity', '%s km | %s mi', current.vis_km, current.vis_miles)
 		add('Cloud Coverage', '%s%% ', current.cloud)
 		add('UV Index', '%s', current.uv)
@@ -1208,4 +1222,7 @@ cmds['forecast'] = {function(arg)
 
 end, 'Shows a weather forecast for the provided location.'}
 
-return cmds
+return {
+	onMessageCreate = onMessageCreate,
+	onMessageDelete = onMessageDelete,
+}
