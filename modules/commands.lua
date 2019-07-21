@@ -986,8 +986,6 @@ local function getWeather(method, query) -- TODO request caching
 
 	local res, data = http.request('GET', url)
 
-	print(url)
-
 	data = json.decode(data)
 
 	if res.code < 300 then
@@ -1002,7 +1000,15 @@ local function getWeather(method, query) -- TODO request caching
 
 end
 
+local weatherParam = '--full'
+
 cmds['weather'] = {function(arg)
+
+	local extra
+	if arg:find(weatherParam, 1, true) then
+		extra = true
+		arg = arg:gsub(weatherParam, '')
+	end
 
 	local weather, err = getWeather('current', {q = arg})
 
@@ -1018,9 +1024,10 @@ cmds['weather'] = {function(arg)
 		insert(fields, {name = name, value = value:format(...), inline = true})
 	end
 
-	add('Coordinates', '%s, %s', location.lat, location.lon)
-	add('Timezone', location.tz_id)
-	add('Local Time', location.localtime)
+	if extra then
+		add('Coordinates', '%s, %s', location.lat, location.lon)
+		add('Timezone', location.tz_id)
+		add('Local Time', location.localtime)
 	add('Last Updated', current.last_updated)
 	add('Temperature', '%s °C | %s °F', current.temp_c, current.temp_f)
 	add('Feels Like', '%s °C | %s °F', current.feelslike_c, current.feelslike_f)
@@ -1030,9 +1037,26 @@ cmds['weather'] = {function(arg)
 	add('Pressure', '%s mbar | %s inHg', current.pressure_mb, current.pressure_in)
 	add('Precipitation', '%s mm | %s in', current.precip_mm, current.precip_in)
 	add('Humidity', '%s%% ', current.humidity)
-	add('Visiblity', '%s km | %s mi', current.vis_km, current.vis_miles)
-	add('Cloud Coverage', '%s%% ', current.cloud)
-	add('UV Index', '%s', current.uv)
+		add('Visiblity', '%s km | %s mi', current.vis_km, current.vis_miles)
+		add('Cloud Coverage', '%s%% ', current.cloud)
+		add('UV Index', '%s', current.uv)
+	else
+		-- add('Coordinates', '%s, %s', location.lat, location.lon)
+		-- add('Timezone', location.tz_id)
+		add('Local Time', location.localtime)
+		-- add('Last Updated', current.last_updated)
+		add('Temperature', '%s °C | %s °F', current.temp_c, current.temp_f)
+		add('Feels Like', '%s °C | %s °F', current.feelslike_c, current.feelslike_f)
+		add('Wind Speed', '%s kph | %s mph', current.wind_kph, current.wind_mph)
+		-- add('Gust Speed', '%s kph | %s mph', current.gust_kph, current.gust_mph)
+		add('Wind Direction', '%s° | %s', current.wind_degree, current.wind_dir)
+		add('Pressure', '%s mbar | %s inHg', current.pressure_mb, current.pressure_in)
+		add('Precipitation', '%s mm | %s in', current.precip_mm, current.precip_in)
+		add('Humidity', '%s%% ', current.humidity)
+		-- add('Visiblity', '%s km | %s mi', current.vis_km, current.vis_miles)
+		-- add('Cloud Coverage', '%s%% ', current.cloud)
+		-- add('UV Index', '%s', current.uv)
+	end
 
 	local title
 	if location.region and #location.region > 0 then
