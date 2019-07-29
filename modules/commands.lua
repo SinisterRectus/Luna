@@ -940,31 +940,15 @@ cmds['members'] = {function(arg, msg)
 
 end, 'Shows members that match a specific query.'}
 
-cmds['quotelink'] = {function(_, msg)
+local function quote(message)
 
-	local messages = msg.channel:getMessages():toArray('id')
-	local client = msg.client
+	local channel = message.channel
+	local guild = channel.guild
 
-	for i = #messages, 1, -1 do
+	local member = guild and guild.members:get(message.author.id)
+	local color = member and member:getColor().value or 0
 
-		local m = messages[i]
-		local guildId, channelId, messageId = m.content:match('https://.-%.?discordapp.com/channels/(%d+)/(%d+)/(%d+)')
-
-		if guildId and channelId and messageId then
-
-			local guild = assert(client:getGuild(guildId))
-			local channel = assert(guild:getChannel(channelId))
-			local bot = assert(guild:getMember(client.user))
-
-			assert(bot:hasPermission(channel, 'readMessages'))
-			assert(bot:hasPermission(channel, 'readMessageHistory'))
-
-			local message = assert(channel:getMessage(messageId) or channel:getMessagesAfter(messageId, 1):iter()())
-
-			local member = guild.members:get(message.author.id)
-			local color = member and member:getColor().value or 0
-
-			return {
+	return {
 				embed = {
 					author = {
 						name = message.author.username,
@@ -979,11 +963,61 @@ cmds['quotelink'] = {function(_, msg)
 				}
 			}
 
+end
+
+cmds['quotelink'] = {function(_, msg)
+
+	local messages = msg.channel:getMessages():toArray('id')
+	local client = msg.client
+
+	for i = #messages, 1, -1 do
+
+		local m = messages[i]
+		local guildId, channelId, messageId = m.content:match('https://.-%.?discordapp.com/channels/(%d+)/(%d+)/(%d+)')
+
+		if guildId and channelId and messageId then
+
+			local guild = assert(client:getGuild(guildId), 'unknown guild')
+			local channel = assert(guild:getChannel(channelId), 'unknown channel')
+			local bot = assert(guild:getMember(client.user))
+
+			assert(bot:hasPermission(channel, 'readMessages'), 'missing read permission')
+			assert(bot:hasPermission(channel, 'readMessageHistory'), 'missing read permission')
+
+			local message = assert(channel:getMessage(messageId) or channel:getMessagesAfter(messageId, 1):iter()())
+
+			return quote(message)
+
 		end
 
 	end
 
 end, 'Shows the content of the most recent message link.'}
+
+cmds['quote'] = {function(arg, msg)
+
+	local client = msg.client
+
+	local channelId, messageId = arg:match('(%d+)%D+(%d+)')
+
+	if messageId and channelId then
+
+		local channel = assert(client:getChannel(channelId), 'unknown channel')
+		local message = assert(channel:getMessage(messageId))
+
+		return quote(message)
+
+	else
+
+		messageId = arg:match('%d+')
+		if messageId then
+			local message = assert(msg.channel:getMessage(messageId))
+			return quote(message)
+		end
+
+	end
+
+end, 'Shows a quote based on the provided [message id] or [channel id] [message id]'}
 
 local function getWeather(method, query) -- TODO request caching
 
