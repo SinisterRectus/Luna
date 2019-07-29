@@ -33,7 +33,6 @@ local function searchMember(msg, query)
 	if query:find('#', 1, true) then -- try username#discriminator combination
 		local username, discriminator = query:match('(.*)#(%d+)$')
 		if username and discriminator then
-			print(username, discriminator)
 			member = members:find(function(m) return m.username == username and m.discriminator == discriminator end)
 			if member then
 				return member
@@ -131,7 +130,7 @@ local function onMessageCreate(msg)
 
 	if reply then
 		replies[msg.id] = reply
-	else
+	elseif err then
 		print(err)
 	end
 
@@ -949,19 +948,19 @@ local function quote(message)
 	local color = member and member:getColor().value or 0
 
 	return {
-				embed = {
-					author = {
-						name = message.author.username,
-						icon_url = message.author.avatarURL,
-					},
-					description = message.content,
-					footer = {
-						text = f('#%s in %s', channel.name, guild.name),
-					},
-					timestamp = message.timestamp,
-					color = color > 0 and color or nil,
-				}
-			}
+		embed = {
+			author = {
+				name = message.author.username,
+				icon_url = message.author.avatarURL,
+			},
+			description = message.content,
+			footer = {
+				text = f('#%s in %s', channel.name, guild.name),
+			},
+			timestamp = message.timestamp,
+			color = color > 0 and color or nil,
+		}
+	}
 
 end
 
@@ -1049,16 +1048,29 @@ local function getWeather(method, query) -- TODO request caching
 end
 
 local weatherParam = '--full'
+local weatherFile = 'weather.json'
+local weatherData
 
-cmds['weather'] = {function(arg)
+do
+	weatherData = fs.readFileSync(weatherFile)
+	weatherData = weatherData and json.decode(weatherData) or {}
+end
 
-	local extra
-	if arg:find(weatherParam, 1, true) then
-		extra = true
-		arg = arg:gsub(weatherParam, '')
+cmds['weather'] = {function(arg, msg)
+
+	local extra, q
+
+	if arg then
+		if arg:find(weatherParam, 1, true) then
+			extra = true
+			arg = arg:gsub(weatherParam, '')
+		end
+		q = arg
+	else
+		q = weatherData[msg.author.id]
 	end
 
-	local weather, err = getWeather('current', {q = arg})
+	local weather, err = getWeather('current', {q = q})
 
 	if not weather then
 		return err
@@ -1091,14 +1103,14 @@ cmds['weather'] = {function(arg)
 	else
 		-- add('Coordinates', '%s, %s', location.lat, location.lon)
 		-- add('Timezone', location.tz_id)
-		add('Local Time', location.localtime)
+		-- add('Local Time', location.localtime)
 		-- add('Last Updated', current.last_updated)
 		add('Temperature', '%s °C | %s °F', current.temp_c, current.temp_f)
 		add('Feels Like', '%s °C | %s °F', current.feelslike_c, current.feelslike_f)
 		add('Wind Speed', '%s kph | %s mph', current.wind_kph, current.wind_mph)
 		-- add('Gust Speed', '%s kph | %s mph', current.gust_kph, current.gust_mph)
 		add('Wind Direction', '%s° | %s', current.wind_degree, current.wind_dir)
-		add('Pressure', '%s mbar | %s inHg', current.pressure_mb, current.pressure_in)
+		-- add('Pressure', '%s mbar | %s inHg', current.pressure_mb, current.pressure_in)
 		add('Precipitation', '%s mm | %s in', current.precip_mm, current.precip_in)
 		add('Humidity', '%s%% ', current.humidity)
 		-- add('Visiblity', '%s km | %s mi', current.vis_km, current.vis_miles)
@@ -1187,6 +1199,13 @@ local function markdown(tbl)
 	return table.concat(buf)
 
 end
+
+cmds['setweather'] = {function(arg, msg)
+
+	weatherData[msg.author.id] = arg
+	fs.writeFileSync(weatherFile, json.encode(weatherData))
+
+end, 'Sets your default query for weather commands.'}
 
 cmds['forecast'] = {function(arg)
 
