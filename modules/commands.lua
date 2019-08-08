@@ -982,6 +982,8 @@ cmds['quotelink'] = {function(_, msg)
 
 			assert(bot:hasPermission(channel, 'readMessages'), 'missing read permission')
 			assert(bot:hasPermission(channel, 'readMessageHistory'), 'missing read permission')
+			assert(msg.member:hasPermission(channel, 'readMessages'), 'missing read permission')
+			assert(msg.member:hasPermission(channel, 'readMessageHistory'), 'missing read permission')
 
 			local message = assert(channel:getMessage(messageId) or channel:getMessagesAfter(messageId, 1):iter()())
 
@@ -1002,6 +1004,13 @@ cmds['quote'] = {function(arg, msg)
 	if messageId and channelId then
 
 		local channel = assert(client:getChannel(channelId), 'unknown channel')
+		local bot = assert(msg.guild:getMember(client.user))
+
+		assert(bot:hasPermission(channel, 'readMessages'), 'missing read permission')
+		assert(bot:hasPermission(channel, 'readMessageHistory'), 'missing read permission')
+		assert(msg.member:hasPermission(channel, 'readMessages'), 'missing read permission')
+		assert(msg.member:hasPermission(channel, 'readMessageHistory'), 'missing read permission')
+
 		local message = assert(channel:getMessage(messageId))
 
 		return quote(message)
@@ -1204,6 +1213,7 @@ cmds['setweather'] = {function(arg, msg)
 
 	weatherData[msg.author.id] = arg
 	fs.writeFileSync(weatherFile, json.encode(weatherData))
+	return f('Weather query for %s set to %q', msg.author.mentionString, arg)
 
 end, 'Sets your default query for weather commands.'}
 
