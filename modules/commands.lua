@@ -412,20 +412,20 @@ cmds['boosters'] = {function(_, msg)
 
 	local members = {}
 	for member in guild.members:findAll(function(m) return m.premiumSince end) do
-		insert(members, {member.name, member.premiumSince})
+		insert(members, {member.premiumSince, member.username})
 	end
-	sort(members, function(a, b) return a[2] < b[2] end)
+	sort(members, function(a, b) return a[1] < b[1] end)
 
 	local desc = {}
 	local now = Date()
 	for i, v in ipairs(members) do
-		local days = (now - Date.fromISO(v[2]))
-		insert(desc, f('%i. %s - %.2f', i, v[1], days:toDays()))
+		local days = (now - Date.fromISO(v[1]))
+		insert(desc, f('%i. %s - %.2f', i, v[2], days:toDays()))
 	end
 
 	return {
 		embed = {
-			title = guild.name .. ' Boosters (Name - Days)',
+			title = f('%s Boosters (name - days)', guild.name),
 			description = concat(desc, '\n'),
 			color = BOOSTER_COLOR,
 		}
