@@ -17,6 +17,61 @@ local urlencode = qs.urlencode
 local Date = discordia.Date
 local Time = discordia.Time
 
+local function markdown(tbl)
+
+	local widths = setmetatable({}, {__index = function() return 0 end})
+
+	for i = 0, #tbl do
+		for j, v in ipairs(tbl[i]) do
+			widths[j] = math.max(widths[j], #v)
+		end
+	end
+
+	local buf = {}
+	local function append(str)
+		return table.insert(buf, str)
+	end
+
+	local m = #tbl[0]
+
+	append('|')
+	for i, v in ipairs(tbl[0]) do
+		append(' ')
+		append(v)
+		local n = widths[i] - #v
+		if n > 0 then
+			append(string.rep(' ', n))
+		end
+		append(' |')
+	end
+	append('\n')
+
+	append('|')
+	for _, n in ipairs(widths) do
+		append(string.rep('-', n))
+		append('--|')
+	end
+	append('\n')
+
+	for _, line in ipairs(tbl) do
+		append('|')
+		for i = 1, m do
+			local v = line[i] or ''
+			append(' ')
+			append(v)
+			local n = widths[i] - #v
+			if n > 0 then
+				append(string.rep(' ', n))
+			end
+			append(' |')
+		end
+		append('\n')
+	end
+
+	return table.concat(buf)
+
+end
+
 local function searchMember(msg, query)
 
 	if not query then return end
@@ -449,12 +504,10 @@ end, 'Bot owner only. Cleans chat messages after a specific ID.'}
 
 cmds['joined'] = {function(_, msg)
 
-	local guild = msg.guild
 	local members = {}
-
 	for m in msg.channel:getMessages(100):iter() do
-		local member = guild:getMember(m.author)
-		if member.joinedAt then
+		local member = m.member
+		if member and member.joinedAt then
 			members[member] = true
 		end
 	end
@@ -481,6 +534,46 @@ cmds['joined'] = {function(_, msg)
 
 end, 'Shows recently joined members based on recent message authors.'}
 
+for k, v in pairs(discordia.enums.activityType) do
+	print(k, v)
+end
+
+cmds['playing'] = {function(arg, msg)
+
+	local counts = setmetatable({}, {__index = function() return 0 end})
+	for m in msg.guild.members:iter() do
+		local name = not m.bot and m.activity and m.activity.type == 0 and m.activity.name
+		if name then
+			counts[name] = counts[name] + 1
+		end
+	end
+
+	local sorted, n = {}, 0
+	for name, count in pairs(counts) do
+		if count > 1 then
+			insert(sorted, {name, count})
+			n = n + count
+		end
+	end
+	sort(sorted, function(a, b) return a[2] > b[2] end)
+
+	local tbl = {[0] = {' ', f('Common Applications (%i)', #sorted), f('Count (%i)', n)}}
+	for i = 1, tonumber(arg) or 10 do
+		local v = sorted[i]
+		if v then
+			tbl[i] = {tostring(i), sorted[i][1], tostring(sorted[i][2])}
+		else
+			break
+		end
+	end
+
+	return {
+		content = markdown(tbl),
+		code = true,
+	}
+
+end, 'Shows common games according to playing statuses.'}
+
 cmds['discrims'] = {function(arg, msg)
 
 	local counts = setmetatable({}, {__index = function() return 0 end})
@@ -506,6 +599,8 @@ cmds['discrims'] = {function(arg, msg)
 		if d then
 			local fmt = f('%%%ii | %%04i | %%i', #tostring(n))
 			insert(content, f(fmt, i, d[1], d[2]))
+		else
+			break
 		end
 	end
 	return {content = concat(content, '\n'), code = true}
@@ -1153,61 +1248,6 @@ cmds['weather'] = {function(arg, msg)
 	}
 
 end, 'Shows the current weather for the provided location.'}
-
-local function markdown(tbl)
-
-	local widths = setmetatable({}, {__index = function() return 0 end})
-
-	for i = 0, #tbl do
-		for j, v in ipairs(tbl[i]) do
-			widths[j] = math.max(widths[j], #v)
-		end
-	end
-
-	local buf = {}
-	local function append(str)
-		return table.insert(buf, str)
-	end
-
-	local m = #tbl[0]
-
-	append('|')
-	for i, v in ipairs(tbl[0]) do
-		append(' ')
-		append(v)
-		local n = widths[i] - #v
-		if n > 0 then
-			append(string.rep(' ', n))
-		end
-		append(' |')
-	end
-	append('\n')
-
-	append('|')
-	for _, n in ipairs(widths) do
-		append(string.rep('-', n))
-		append('--|')
-	end
-	append('\n')
-
-	for _, line in ipairs(tbl) do
-		append('|')
-		for i = 1, m do
-			local v = line[i] or ''
-			append(' ')
-			append(v)
-			local n = widths[i] - #v
-			if n > 0 then
-				append(string.rep(' ', n))
-			end
-			append(' |')
-		end
-		append('\n')
-	end
-
-	return table.concat(buf)
-
-end
 
 cmds['setweather'] = {function(arg, msg)
 
