@@ -1,4 +1,5 @@
 local discordia = require('discordia')
+local abs = math.abs
 
 local GENERAL = '381870553235193857' -- dapi #general
 local lastNumber = false
@@ -22,9 +23,10 @@ end
 
 return function(msg)
     local channel = msg.channel
+    local guild = msg.guild
     local bot = guild.me
 
-    if channel.id != GENERAL then
+    if channel.id ~= GENERAL then
         return
     end
 
