@@ -9,6 +9,7 @@ local insert, concat, sort = table.insert, table.concat, table.sort
 
 local clamp = math.clamp -- luacheck: ignore
 local pack = table.pack -- luacheck: ignore
+local levenshtein = utf8.levenshtein -- luacheck: ignore
 
 local dump = pp.dump
 
@@ -98,7 +99,7 @@ local function searchMember(msg, query)
 
 	for m in members:iter() do
 		if m.nickname and m.nickname:lower():find(lowered, 1, true) then
-			local d = m.nickname:levenshtein(query)
+			local d = levenshtein(m.nickname, query)
 			if d == 0 then
 				return m
 			elseif d < distance then
@@ -107,7 +108,7 @@ local function searchMember(msg, query)
 			end
 		end
 		if m.username:lower():find(lowered, 1, true) then
-			local d = m.username:levenshtein(query)
+			local d = levenshtein(m.username, query)
 			if d == 0 then
 				return m
 			elseif d < distance then
@@ -818,7 +819,7 @@ cmds['steal'] = {function(arg, msg)
 	end
 
 	local function levensort(a, b)
-		return a[1]:levenshtein(arg) < b[1]:levenshtein(arg)
+		return levenshtein(a[1], arg) < levenshtein(b[1], arg)
 	end
 
 	local emoji
@@ -968,7 +969,7 @@ cmds['members'] = {function(arg, msg)
 		else
 			insert(matches[2], member)
 		end
-		usernameDistances[member] = username:levenshtein(arg)
+		usernameDistances[member] = levenshtein(username, arg)
 
 		local nickname = member.nickname
 		if nickname then
@@ -978,7 +979,7 @@ cmds['members'] = {function(arg, msg)
 			else
 				insert(matches[4], member)
 			end
-			nicknameDistances[member] = nickname:levenshtein(arg)
+			nicknameDistances[member] = levenshtein(username, arg)
 		end
 
 	end
