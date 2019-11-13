@@ -5,7 +5,6 @@ local discordia = require('discordia')
 
 local cfg = json.decode(fs.readFileSync('config.json'))
 
-discordia.storage.apixu_key = cfg.apixu_key
 discordia.extensions()
 modules()
 

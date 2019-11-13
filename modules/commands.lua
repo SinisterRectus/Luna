@@ -2,7 +2,6 @@ local discordia = require('discordia')
 local pp = require('pretty-print')
 local fs = require('fs')
 local http = require('coro-http')
-local qs = require('querystring')
 
 local random, max = math.random, math.max
 local f, upper = string.format, string.upper
@@ -12,7 +11,6 @@ local clamp = math.clamp -- luacheck: ignore
 local pack = table.pack -- luacheck: ignore
 
 local dump = pp.dump
-local urlencode = qs.urlencode
 
 local Date = discordia.Date
 local Time = discordia.Time
@@ -533,10 +531,6 @@ cmds['joined'] = {function(_, msg)
 	}
 
 end, 'Shows recently joined members based on recent message authors.'}
-
-for k, v in pairs(discordia.enums.activityType) do
-	print(k, v)
-end
 
 cmds['playing'] = {function(arg, msg)
 
@@ -1121,209 +1115,6 @@ cmds['quote'] = {function(arg, msg)
 	end
 
 end, 'Shows a quote based on the provided [message id] or [channel id] [message id]'}
-
-local function getWeather(method, query) -- TODO request caching
-
-	query.key = discordia.storage.apixu_key
-
-	local url = {f('http://api.apixu.com/v1/%s.json', method)}
-	for k, v in pairs(query) do
-		insert(url, #url == 1 and '?' or '&')
-		insert(url, urlencode(k))
-		insert(url, '=')
-		insert(url, urlencode(v))
-	end
-	url = concat(url)
-
-	local res, data = http.request('GET', url)
-
-	data = json.decode(data)
-
-	if res.code < 300 then
-		return data
-	else
-		if data and data.error and data.error.message then
-			return nil, 'Apixu.com error: ' .. data.error.message
-		else
-			return nil, res.reason
-		end
-	end
-
-end
-
-local weatherParam = '--full'
-local weatherFile = 'weather.json'
-local weatherData
-
-do
-	weatherData = fs.readFileSync(weatherFile)
-	weatherData = weatherData and json.decode(weatherData) or {}
-end
-
-cmds['weather'] = {function(arg, msg)
-
-	local extra, q
-
-	if arg then
-		if arg:find(weatherParam, 1, true) then
-			extra = true
-			arg = arg:gsub(weatherParam, '')
-		end
-		q = arg
-	else
-		q = weatherData[msg.author.id]
-	end
-
-	local weather, err = getWeather('current', {q = q})
-
-	if not weather then
-		return err
-	end
-
-	local location = weather.location
-	local current = weather.current
-
-	local fields = {}
-	local function add(name, value, ...)
-		insert(fields, {name = name, value = value:format(...), inline = true})
-	end
-
-	if extra then
-		add('Coordinates', '%s, %s', location.lat, location.lon)
-		add('Timezone', location.tz_id)
-		add('Local Time', location.localtime)
-		add('Last Updated', current.last_updated)
-		add('Temperature', '%s °C | %s °F', current.temp_c, current.temp_f)
-		add('Feels Like', '%s °C | %s °F', current.feelslike_c, current.feelslike_f)
-		add('Wind Speed', '%s kph | %s mph', current.wind_kph, current.wind_mph)
-		add('Gust Speed', '%s kph | %s mph', current.gust_kph, current.gust_mph)
-		add('Wind Direction', '%s° | %s', current.wind_degree, current.wind_dir)
-		add('Pressure', '%s mbar | %s inHg', current.pressure_mb, current.pressure_in)
-		add('Precipitation', '%s mm | %s in', current.precip_mm, current.precip_in)
-		add('Humidity', '%s%% ', current.humidity)
-		add('Visiblity', '%s km | %s mi', current.vis_km, current.vis_miles)
-		add('Cloud Coverage', '%s%% ', current.cloud)
-		add('UV Index', '%s', current.uv)
-	else
-		-- add('Coordinates', '%s, %s', location.lat, location.lon)
-		-- add('Timezone', location.tz_id)
-		-- add('Local Time', location.localtime)
-		-- add('Last Updated', current.last_updated)
-		add('Temperature', '%s °C | %s °F', current.temp_c, current.temp_f)
-		add('Feels Like', '%s °C | %s °F', current.feelslike_c, current.feelslike_f)
-		add('Wind Speed', '%s kph | %s mph', current.wind_kph, current.wind_mph)
-		-- add('Gust Speed', '%s kph | %s mph', current.gust_kph, current.gust_mph)
-		add('Wind Direction', '%s° | %s', current.wind_degree, current.wind_dir)
-		-- add('Pressure', '%s mbar | %s inHg', current.pressure_mb, current.pressure_in)
-		add('Precipitation', '%s mm | %s in', current.precip_mm, current.precip_in)
-		add('Humidity', '%s%% ', current.humidity)
-		-- add('Visiblity', '%s km | %s mi', current.vis_km, current.vis_miles)
-		-- add('Cloud Coverage', '%s%% ', current.cloud)
-		-- add('UV Index', '%s', current.uv)
-	end
-
-	local title
-	if location.region and #location.region > 0 then
-		title = f('Weather for %s, %s, %s', location.name, location.region, location.country)
-	else
-		title = f('Weather for %s, %s', location.name, location.country)
-	end
-
-	local localTime = Date(location.localtime_epoch)
-	local lastUpdated = Date(current.last_updated_epoch)
-
-	return {
-		embed = {
-			title = title,
-			description = f('%s, updated %s ago',current.condition.text, (localTime - lastUpdated):toString()),
-			thumbnail = {
-				url = 'https:' .. current.condition.icon,
-			},
-			fields = fields,
-			footer = {
-				text = 'Powered by Apixu.com',
-			},
-			timestamp = lastUpdated:toISO(),
-		}
-	}
-
-end, 'Shows the current weather for the provided location.'}
-
-cmds['setweather'] = {function(arg, msg)
-
-	weatherData[msg.author.id] = arg
-	fs.writeFileSync(weatherFile, json.encode(weatherData))
-	return f('Weather query for %s set to %q', msg.author.mentionString, arg)
-
-end, 'Sets your default query for weather commands.'}
-
-cmds['forecast'] = {function(arg)
-
-		local weather, err = getWeather('forecast', {q = arg,	days = 5})
-
-		if not weather then
-			return err
-		end
-
-		local location = weather.location
-
-		local title
-		if location.region and #location.region > 0 then
-			title = f('Forecast for %s, %s, %s', location.name, location.region, location.country)
-		else
-			title = f('Forecast for %s, %s', location.name, location.country)
-		end
-
-		local i = 0
-		local data = {}
-
-		local function add(str, ...)
-			data[i] = data[i] or {}
-			insert(data[i], str:format(...))
-			i = i + 1
-		end
-
-		local function reset()
-			i = 0
-		end
-
-		add('')
-		add('Sunrise')
-		add('Sunset')
-		add('Moonrise')
-		add('Moonset')
-		add('Max Temp (C | F)')
-		add('Avg Temp (C | F)')
-		add('Min Temp (C | F)')
-		add('Max Wind Speed (kph | mph)')
-		add('Total Precip (mm | in)')
-		add('Average Visibility (km | mi)')
-		add('Average Humidity (%%)')
-		add('UV Index')
-		reset()
-
-		local fmt = '%s | %s'
-
-		for _, v in ipairs(weather.forecast.forecastday) do
-			add(v.date)
-			add(v.astro.sunrise)
-			add(v.astro.sunset)
-			add(v.astro.moonrise)
-			add(v.astro.moonset)
-			add(fmt, v.day.maxtemp_c, v.day.maxtemp_f)
-			add(fmt, v.day.avgtemp_c, v.day.avgtemp_f)
-			add(fmt, v.day.mintemp_c, v.day.mintemp_f)
-			add(fmt , v.day.maxwind_kph, v.day.maxwind_mph)
-			add(fmt, v.day.totalprecip_mm, v.day.totalprecip_in)
-			add(fmt, v.day.avgvis_km, v.day.avgvis_miles)
-			add('%s', v.day.avghumidity)
-			add('%s', v.day.uv)
-			reset()
-		end
-
-		return f('%s\n```\n%s\n```', title, markdown(data))
-
-end, 'Shows a weather forecast for the provided location.'}
 
 return {
 	onMessageCreate = onMessageCreate,
