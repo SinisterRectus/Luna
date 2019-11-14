@@ -16,58 +16,80 @@ local dump = pp.dump
 local Date = discordia.Date
 local Time = discordia.Time
 
+local zero = {__index = function() return 0 end}
+
 local function markdown(tbl)
 
-	local widths = setmetatable({}, {__index = function() return 0 end})
+	local widths = setmetatable({}, zero)
+	local columns = 0
+	local buf = {}
+	local pos
 
 	for i = 0, #tbl do
+		columns = max(columns, #tbl[i])
 		for j, v in ipairs(tbl[i]) do
-			widths[j] = math.max(widths[j], #v)
+			widths[j] = max(widths[j], utf8.len(v))
 		end
 	end
 
-	local buf = {}
-	local function append(str)
-		return table.insert(buf, str)
+	local function append(str, n)
+		if n then
+			return insert(buf, str:rep(n))
+		else
+			return insert(buf, str)
+		end
 	end
 
-	local m = #tbl[0]
+	local function startRow()
+		if pos then
+			append('\n')
+		end
+		append('|')
+		pos = 1
+	end
 
-	append('|')
-	for i, v in ipairs(tbl[0]) do
-		append(' ')
+	local function appendBreak(n)
+		append('-', n + 2)
+		append('|')
+		pos = pos + 1
+	end
+
+	local function appendItem(v, pad)
+		v = v or ''
+		pad = pad or ' '
+		append(pad)
 		append(v)
-		local n = widths[i] - #v
+		local n = widths[pos] - utf8.len(v)
 		if n > 0 then
-			append(string.rep(' ', n))
+			append(pad, n)
 		end
-		append(' |')
+		append(pad)
+		append('|')
+		pos = pos + 1
 	end
-	append('\n')
 
-	append('|')
-	for _, n in ipairs(widths) do
-		append(string.rep('-', n))
-		append('--|')
+	append('```\n')
+
+	startRow()
+	for i = 1, columns do
+		appendItem(tbl[0][i])
 	end
-	append('\n')
+
+	startRow()
+	for _, n in ipairs(widths) do
+		appendBreak(n)
+	end
 
 	for _, line in ipairs(tbl) do
-		append('|')
-		for i = 1, m do
-			local v = line[i] or ''
-			append(' ')
-			append(v)
-			local n = widths[i] - #v
-			if n > 0 then
-				append(string.rep(' ', n))
-			end
-			append(' |')
+		startRow()
+		for i = 1, columns do
+			appendItem(line[i])
 		end
-		append('\n')
 	end
 
-	return table.concat(buf)
+	append('\n```')
+
+	return concat(buf)
 
 end
 
@@ -535,7 +557,7 @@ end, 'Shows recently joined members based on recent message authors.'}
 
 cmds['playing'] = {function(arg, msg)
 
-	local counts = setmetatable({}, {__index = function() return 0 end})
+	local counts = setmetatable({}, zero)
 	for m in msg.guild.members:iter() do
 		local name = not m.bot and m.activity and m.activity.type == 0 and m.activity.name
 		if name then
@@ -562,16 +584,13 @@ cmds['playing'] = {function(arg, msg)
 		end
 	end
 
-	return {
-		content = markdown(tbl),
-		code = true,
-	}
+	return markdown(tbl)
 
 end, 'Shows common games according to playing statuses.'}
 
 cmds['discrims'] = {function(arg, msg)
 
-	local counts = setmetatable({}, {__index = function() return 0 end})
+	local counts = setmetatable({}, zero)
 
 	for member in msg.guild.members:iter() do
 		local d = tonumber(member.discriminator)
@@ -944,80 +963,61 @@ cmds['members'] = {function(arg, msg)
 	local guild = msg.guild
 	local lowered = arg:lower()
 
-	local titles = {
-		'Matched Usernames',
-		'Similar Usernames',
-		'Matched Nicknames',
-		'Similar Nicknames',
+	local matches = {
+		{title = 'Matched Usernames'},
+		{title = 'Similar Usernames'},
+		{title = 'Matched Nicknames', nick = true},
+		{title = 'Similar Nicknames', nick = true},
 	}
 
-	local matches = {}
-	for i = 1, 6 do
-		matches[i] = {}
-	end
-
 	local n = 5
-	local usernameDistances = {}
-	local nicknameDistances = {}
 
 	for member in guild.members:iter() do
 
 		local username = member.username
 		local loweredUsername = username:lower()
 		if loweredUsername:find(lowered) then
-			insert(matches[1], member)
+			insert(matches[1], {member, levenshtein(username, arg)})
 		else
-			insert(matches[2], member)
+			insert(matches[2], {member, levenshtein(username, arg)})
 		end
-		usernameDistances[member] = levenshtein(username, arg)
 
 		local nickname = member.nickname
 		if nickname then
 			local loweredNickname = nickname:lower()
 			if loweredNickname:find(lowered) then
-				insert(matches[3], member)
+				insert(matches[3], {member, levenshtein(nickname, arg)})
 			else
-				insert(matches[4], member)
+				insert(matches[4], {member, levenshtein(nickname, arg)})
 			end
-			nicknameDistances[member] = levenshtein(username, arg)
 		end
 
 	end
 
-	sort(matches[1], function (a, b)
-		return usernameDistances[a] < usernameDistances[b]
-	end)
-
-	sort(matches[2], function (a, b)
-		return usernameDistances[a] < usernameDistances[b]
-	end)
-
-	sort(matches[3], function (a, b)
-		return nicknameDistances[a] < nicknameDistances[b]
-	end)
-
-	sort(matches[4], function (a, b)
-		return nicknameDistances[a] < nicknameDistances[b]
-	end)
+	for _, v in ipairs(matches) do
+		sort(v, function(a, b) return a[2] < b[2]	end)
+	end
 
 	local fields = {}
-	for i, v in ipairs(matches) do
-		local field = {'```lua'}
+	for _, v in ipairs(matches) do
+		local field = {}
+		if v.nick then
+			field[0] = {'User', 'Nickname', 'Δ'}
+		else
+			field[0] = {'User', 'Δ'}
+		end
 		for j = 1, n do
-			local member = v[j]
-			if v[j] then
-				if member.nickname then
-					insert(field, f('%i. %s#%s (%s)', j, member.username, member.discriminator, member.nickname))
+			local member = v[j] and v[j][1]
+			if member then
+				if v.nick then
+					insert(field, {member.tag, member.nickname, tostring(v[j][2])})
 				else
-					insert(field, f('%i. %s#%s', j, member.username, member.discriminator))
+					insert(field, {member.tag, tostring(v[j][2])})
 				end
-				-- insert(field, f('%i. %s', j, member.mentionString))
 			end
 		end
 		if #field > 1 then
-			insert(field, '```')
-			field = {name = f('%s (%i)', titles[i], #v), value = concat(field, '\n')}
-			insert(fields, field)
+			insert(fields, {name = f('%s (%i)', v.title, #v), value = markdown(field)})
 		end
 	end
 
