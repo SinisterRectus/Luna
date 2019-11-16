@@ -1,5 +1,4 @@
 local discordia = require('discordia')
-local pp = require('pretty-print')
 local fs = require('fs')
 local http = require('coro-http')
 
@@ -9,144 +8,20 @@ local insert, concat, sort = table.insert, table.concat, table.sort
 
 local clamp = math.clamp -- luacheck: ignore
 local pack = table.pack -- luacheck: ignore
-local levenshtein = utf8.levenshtein -- luacheck: ignore
-
-local dump = pp.dump
+local levenshtein = utf8.levenshtein or string.levenshtein -- luacheck: ignore
+local loader = loader -- luacheck: ignore
 
 local Date = discordia.Date
-local Time = discordia.Time
 
-local zero = {__index = function() return 0 end}
+local statusEnum = {online = 1, idle = 2, dnd = 3, offline = 4}
+local statusText = {'Online', 'Idle', 'Do Not Disturb', 'Offline'}
 
-local function markdown(tbl)
+local DAPI_GUILD = '81384788765712384'
+local DISCORDIA_SUBS = '238388552663171072'
+local BOOSTER_COLOR = 0xF47FFF
+local SPOTIFY_GREEN = 0x1ED760
 
-	local widths = setmetatable({}, zero)
-	local columns = 0
-	local buf = {}
-	local pos
-
-	for i = 0, #tbl do
-		columns = max(columns, #tbl[i])
-		for j, v in ipairs(tbl[i]) do
-			widths[j] = max(widths[j], utf8.len(v))
-		end
-	end
-
-	local function append(str, n)
-		if n then
-			return insert(buf, str:rep(n))
-		else
-			return insert(buf, str)
-		end
-	end
-
-	local function startRow()
-		if pos then
-			append('\n')
-		end
-		append('|')
-		pos = 1
-	end
-
-	local function appendBreak(n)
-		append('-', n + 2)
-		append('|')
-		pos = pos + 1
-	end
-
-	local function appendItem(v, pad)
-		v = v or ''
-		pad = pad or ' '
-		append(pad)
-		append(v)
-		local n = widths[pos] - utf8.len(v)
-		if n > 0 then
-			append(pad, n)
-		end
-		append(pad)
-		append('|')
-		pos = pos + 1
-	end
-
-	append('```\n')
-
-	startRow()
-	for i = 1, columns do
-		appendItem(tbl[0][i])
-	end
-
-	startRow()
-	for _, n in ipairs(widths) do
-		appendBreak(n)
-	end
-
-	for _, line in ipairs(tbl) do
-		startRow()
-		for i = 1, columns do
-			appendItem(line[i])
-		end
-	end
-
-	append('\n```')
-
-	return concat(buf)
-
-end
-
-local function searchMember(msg, query)
-
-	if not query then return end
-
-	local guild = msg.guild
-	local members = guild.members
-	local user = msg.mentionedUsers.first
-
-	local member = user and guild:getMember(user) or members:get(query) -- try mentioned user or cache lookup by id
-	if member then
-		return member
-	end
-
-	if query:find('#', 1, true) then -- try username#discriminator combination
-		local username, discriminator = query:match('(.*)#(%d+)$')
-		if username and discriminator then
-			member = members:find(function(m) return m.username == username and m.discriminator == discriminator end)
-			if member then
-				return member
-			end
-		end
-	end
-
-	local distance = math.huge
-	local lowered = query:lower()
-
-	for m in members:iter() do
-		if m.nickname and m.nickname:lower():find(lowered, 1, true) then
-			local d = levenshtein(m.nickname, query)
-			if d == 0 then
-				return m
-			elseif d < distance then
-				member = m
-				distance = d
-			end
-		end
-		if m.username:lower():find(lowered, 1, true) then
-			local d = levenshtein(m.username, query)
-			if d == 0 then
-				return m
-			elseif d < distance then
-				member = m
-				distance = d
-			end
-		end
-	end
-
-	if member then
-		return member
-	else
-		return nil, f('No member found for: `%s`', query)
-	end
-
-end
+local helpers = loader.load('_helpers')
 
 local prefix = '~~'
 local function parseContent(content)
@@ -213,9 +88,17 @@ local function onMessageCreate(msg)
 end
 
 local function onMessageDelete(msg)
-	if replies[msg.id] then
-		replies[msg.id]:delete()
-		replies[msg.id] = nil
+	if helpers.isBotAuthored(msg) then
+		for k, reply in pairs(replies) do
+			if msg == reply then
+				replies[k] = nil
+			end
+		end
+	else
+		if replies[msg.id] then
+			replies[msg.id]:delete()
+			replies[msg.id] = nil
+		end
 	end
 end
 
@@ -251,7 +134,7 @@ end, 'Flips a coin.'}
 
 cmds['whois'] = {function(arg, msg)
 
-	local m, err = searchMember(msg, arg)
+	local m, err = helpers.searchMember(msg, arg)
 	if not m then
 		return err
 	end
@@ -279,7 +162,7 @@ cmds['avatar'] = {function(arg, msg)
 	if not arg then
 		return {embed = {image = {url = msg.author.avatarURL}}}
 	else
-		local member, err = searchMember(msg, arg)
+		local member, err = helpers.searchMember(msg, arg)
 		if not member then
 			return err
 		end
@@ -290,14 +173,6 @@ end, 'Provides the avatar of a guild member.'}
 cmds['icon'] = {function(_, msg)
 	return {embed = {image = {url = msg.guild.iconURL}}}
 end, 'Provides the guild icon.'}
-
-local function isOnline(member)
-	return member.status ~= 'offline'
-end
-
-local function hasColor(role)
-	return role.color > 0
-end
 
 cmds['serverinfo'] = {function(_, msg)
 
@@ -312,7 +187,7 @@ cmds['serverinfo'] = {function(_, msg)
 				{name = 'ID', value = guild.id, inline = true},
 				{name = 'Owner', value = owner.tag, inline = true},
 				{name = 'Created', value = Date.fromSnowflake(guild.id):toISO(' ', ''), inline = true},
-				{name = 'Members', value = guild.members:count(isOnline) .. ' / ' .. guild.totalMemberCount, inline = true},
+				{name = 'Members', value = guild.members:count(helpers.isOnline) .. ' / ' .. guild.totalMemberCount, inline = true},
 				{name = 'Categories', value = tostring(#guild.categories), inline = true},
 				{name = 'Text Channels', value = tostring(#guild.textChannels), inline = true},
 				{name = 'Voice Channels', value = tostring(#guild.voiceChannels), inline = true},
@@ -342,7 +217,7 @@ end, 'Provides some information about a provided color.'}
 
 cmds['colors'] = {function(_, msg)
 
-	local roles = msg.guild.roles:toArray('position', hasColor)
+	local roles = msg.guild.roles:toArray('position', helpers.hasColor)
 
 	local len = 0
 	for _, role in ipairs(roles) do
@@ -367,22 +242,6 @@ cmds['colors'] = {function(_, msg)
 
 end, 'Shows the colors of all of the colored roles in the guild.'}
 
-local function printLine(...)
-	local ret = {}
-	for i = 1, select('#', ...) do
-		insert(ret, tostring(select(i, ...)))
-	end
-	return concat(ret, '\t')
-end
-
-local function prettyLine(...)
-	local ret = {}
-	for i = 1, select('#', ...) do
-		insert(ret, dump(select(i, ...), nil, true))
-	end
-	return concat(ret, '\t')
-end
-
 cmds['poop'] = {function(arg, msg)
 
 	local guild = msg.guild
@@ -393,7 +252,7 @@ cmds['poop'] = {function(arg, msg)
 	if not author:hasPermission('manageNicknames') then return end
 	if not guild.me:hasPermission('manageNicknames') then return end
 
-	local member = searchMember(msg, arg)
+	local member = helpers.searchMember(msg, arg)
 	if not member then return end
 
 	if author.highestRole.position > member.highestRole.position then
@@ -423,8 +282,8 @@ cmds['lua'] = {function(arg, msg)
 	sandbox.channel = msg.channel
 	sandbox.guild = msg.guild
 	sandbox.client = msg.client
-	sandbox.print = function(...) insert(lines, printLine(...)) end
-	sandbox.p = function(...) insert(lines, prettyLine(...)) end
+	sandbox.print = function(...) insert(lines, helpers.printLine(...)) end
+	sandbox.p = function(...) insert(lines, helpers.prettyLine(...)) end
 
 	local fn, err = load(arg, 'Luna', 't', sandbox)
 	if not fn then return error(err) end
@@ -443,16 +302,9 @@ cmds['lua'] = {function(arg, msg)
 
 end, 'Bot owner only. Executes Lua code.'}
 
-local enum1 = {online = 1, idle = 2, dnd = 3, offline = 4}
-local enum2 = {'Online', 'Idle', 'Do Not Disturb', 'Offline'}
-
-local DAPI = '81384788765712384'
-local DISCORDIA_SUBS = '238388552663171072'
-local BOOSTER_COLOR = 0xF47FFF
-
 cmds['subs'] = {function(_, msg)
 
-	local guild = msg.client:getGuild(DAPI)
+	local guild = msg.client:getGuild(DAPI_GUILD)
 	if not guild then return end
 	local role = guild:getRole(DISCORDIA_SUBS)
 	if not role then return end
@@ -460,7 +312,7 @@ cmds['subs'] = {function(_, msg)
 	local n = 0
 	local ret = {{}, {}, {}, {}}
 	for member in role.members:iter() do
-		insert(ret[enum1[member.status]], member.name)
+		insert(ret[statusEnum[member.status]], member.name)
 		n = n + 1
 	end
 
@@ -468,7 +320,7 @@ cmds['subs'] = {function(_, msg)
 	for i, v in ipairs(ret) do
 		if #v > 0 then
 			sort(v)
-			insert(fields, {name = enum2[i], value = concat(v, ', ')})
+			insert(fields, {name = statusText[i], value = concat(v, ', ')})
 		end
 	end
 
@@ -557,7 +409,7 @@ end, 'Shows recently joined members based on recent message authors.'}
 
 cmds['playing'] = {function(arg, msg)
 
-	local counts = setmetatable({}, zero)
+	local counts = helpers.zeroTable()
 	for m in msg.guild.members:iter() do
 		local name = not m.bot and m.activity and m.activity.type == 0 and m.activity.name
 		if name then
@@ -584,13 +436,13 @@ cmds['playing'] = {function(arg, msg)
 		end
 	end
 
-	return markdown(tbl)
+	return helpers.markdown(tbl)
 
 end, 'Shows common games according to playing statuses.'}
 
 cmds['discrims'] = {function(arg, msg)
 
-	local counts = setmetatable({}, zero)
+	local counts = helpers.zeroTable()
 
 	for member in msg.guild.members:iter() do
 		local d = tonumber(member.discriminator)
@@ -621,74 +473,22 @@ cmds['discrims'] = {function(arg, msg)
 
 end, 'Shows the top discriminators in use for the guild.'}
 
-local function spotifyActivity(m)
-	return m.activity and m.activity.name == 'Spotify' and m.activity.type == 2
-end
-
-local function spotifyIncrement(counts, hash, member)
-	local count = counts[hash]
-	if count then
-		count[1] = count[1] + 1
-		insert(count, member.tag)
-	else
-		counts[hash] = {1, hash, member.tag}
-	end
-end
-
-local spotifyGreen = discordia.Color.fromRGB(30, 215, 96).value
-
-local function spotifySorter(a, b)
-	return a[1] > b[1]
-end
-
-local function spotifyEmbed(msg, what, listeners, counts, limit)
-
-	local sorted, n = {}, 0
-	for _, v in pairs(counts) do
-		n = n + 1
-		if v[1] > 1 then
-			insert(sorted, v)
-		end
-	end
-	sort(sorted, spotifySorter)
-
-	local fields = {}
-	for i = 1, tonumber(limit) or 5 do
-		local d = sorted[i]
-		if d then
-			insert(fields, {name = d[2], value = f('%i listening | %s', d[1], concat(d, ' ', 3))})
-		else
-			break
-		end
-	end
-
-	return {
-		embed = {
-			title = f('Popular %s on %s', what, msg.guild.name),
-			description = f('Spotify Listeners: %i | Unique %s: %i', listeners, what, n),
-			fields = fields,
-			color = spotifyGreen,
-		}
-	}
-
-end
-
 cmds['artists'] = {function(arg, msg)
 
 	local listeners = 0
 	local counts = {}
 
-	for member in msg.guild.members:findAll(spotifyActivity) do
+	for member in msg.guild.members:findAll(helpers.spotifyActivity) do
 		local artist = member.activity.state
 		if artist then
 			listeners = listeners + 1
 			local hash = artist
-			spotifyIncrement(counts, hash, member)
+			helpers.spotifyIncrement(counts, hash, member)
 		end
 
 	end
 
-	return spotifyEmbed(msg, 'Artists', listeners, counts, arg)
+	return helpers.spotifyEmbed(msg, 'Artists', listeners, counts, arg, SPOTIFY_GREEN)
 
 end, 'Shows common artists according to Spotify statuses.'}
 
@@ -697,17 +497,17 @@ cmds['albums'] = {function(arg, msg)
 	local listeners = 0
 	local counts = {}
 
-	for member in msg.guild.members:findAll(spotifyActivity) do
+	for member in msg.guild.members:findAll(helpers.spotifyActivity) do
 		local artist = member.activity.state
 		local album = member.activity.textLarge
 		if artist and album then
 			listeners = listeners + 1
 			local hash = f('%s by %s', album, artist)
-			spotifyIncrement(counts, hash, member)
+			helpers.spotifyIncrement(counts, hash, member)
 		end
 	end
 
-	return spotifyEmbed(msg, 'Albums', listeners, counts, arg)
+	return helpers.spotifyEmbed(msg, 'Albums', listeners, counts, arg, SPOTIFY_GREEN)
 
 end, 'Shows common albums according to Spotify statuses.'}
 
@@ -716,41 +516,27 @@ cmds['tracks'] = {function(arg, msg)
 	local listeners = 0
 	local counts = {}
 
-	for member in msg.guild.members:findAll(spotifyActivity) do
+	for member in msg.guild.members:findAll(helpers.spotifyActivity) do
 		local artist = member.activity.state
 		local track = member.activity.details
 		if artist and track then
 			listeners = listeners + 1
 			local hash = f('%s by %s', track, artist)
-			spotifyIncrement(counts, hash, member)
+			helpers.spotifyIncrement(counts, hash, member)
 		end
 	end
 
-	return spotifyEmbed(msg, 'Tracks', listeners, counts, arg)
+	return helpers.spotifyEmbed(msg, 'Tracks', listeners, counts, arg, SPOTIFY_GREEN)
 
 end, 'Shows common tracks according to Spotify statuses.'}
 
-local coverCache = {}
-
-local function getAlbumCover(id)
-	local cover = coverCache[id]
-	if cover then
-		return cover
-	end
-	local res, data = http.request("GET", "https://i.scdn.co/image/" .. id)
-	if res.code == 200 then
-		coverCache[id] = data
-		return data
-	end
-end
-
 cmds['listening'] = {function(arg, msg)
 
-	local member = arg and searchMember(msg, arg) or msg.guild:getMember(msg.author)
+	local member = arg and helpers.searchMember(msg, arg) or msg.guild:getMember(msg.author)
 	if not member then return end
 
 	local artist, album, track, start, stop, image
-	if spotifyActivity(member) then
+	if helpers.spotifyActivity(member) then
 		artist = member.activity.state
 		album = member.activity.textLarge
 		track = member.activity.details
@@ -763,7 +549,7 @@ cmds['listening'] = {function(arg, msg)
 
 		local other = {artists = {}, albums = {}, tracks = {}}
 
-		for m in msg.guild.members:findAll(spotifyActivity) do
+		for m in msg.guild.members:findAll(helpers.spotifyActivity) do
 			if m.id ~= member.id then
 				local act = m.activity
 				if act.state == artist then
@@ -796,7 +582,7 @@ cmds['listening'] = {function(arg, msg)
 			insert(fields, {name = 'Current Track Listeners', value = concat(other.tracks, ', ')})
 		end
 
-		local thumbnail = image and getAlbumCover(image:match('spotify:(.*)'))
+		local thumbnail = image and helpers.getAlbumCover(image:match('spotify:(.*)'))
 
 		return {
 			file = thumbnail and {'image.jpg', thumbnail},
@@ -807,7 +593,7 @@ cmds['listening'] = {function(arg, msg)
 				},
 				description = 'Listening on Spotify',
 				fields = fields,
-				color = spotifyGreen,
+				color = SPOTIFY_GREEN,
 				thumbnail = thumbnail and {url = "attachment://image.jpg"},
 			}
 		}
@@ -872,7 +658,7 @@ cmds['emojify'] = {function(arg, msg)
 
 	if msg.author ~= msg.client.owner then return end
 
-	local member = searchMember(msg, arg)
+	local member = helpers.searchMember(msg, arg)
 	if not member then return end
 
 	if member.avatar then
@@ -884,7 +670,6 @@ cmds['emojify'] = {function(arg, msg)
 				local filename = f('temp.%s', ext)
 				fs.writeFileSync(filename, data) -- hack for now
 				local emoji = assert(guild:createEmoji(member.username, filename))
-				-- timer.setTimeout(5000, coroutine.wrap(emoji.delete), emoji)
 				return {mention = emoji}
 			end
 		end
@@ -908,16 +693,6 @@ cmds['rate'] = {function(arg, msg)
 
 end, 'Shows the current rate of channel messages.'}
 
-local function canDelete(msg)
-	return msg.author == msg.client.user
-end
-
-local function canBulkDelete(msg)
-	if msg.id < (Date() - Time.fromWeeks(2)):toSnowflake() then return end
-	local cmd = parseContent(msg.content)
-	return msg.author == msg.client.user or cmds[cmd]
-end
-
 cmds['cleanup'] = {function(_, msg)
 
 	local c = msg.channel
@@ -927,12 +702,15 @@ cmds['cleanup'] = {function(_, msg)
 
 	if c.guild.me:hasPermission(c, 'manageMessages') then
 		local messages = {}
-		for message in c:getMessages(100):findAll(canBulkDelete) do
-			insert(messages, message)
+		for message in c:getMessages(100):findAll(helpers.canBulkDelete) do
+			local cmd = parseContent(message.content)
+			if cmds[cmd] then
+				insert(messages, message)
+			end
 		end
 		c:bulkDelete(messages)
 	else
-		for message in c:getMessages(100):findAll(canDelete) do
+		for message in c:getMessages(100):findAll(helpers.isBotAuthored) do
 			message:delete()
 		end
 	end
@@ -1017,7 +795,7 @@ cmds['members'] = {function(arg, msg)
 			end
 		end
 		if #field > 1 then
-			insert(fields, {name = f('%s (%i)', v.title, #v), value = markdown(field)})
+			insert(fields, {name = f('%s (%i)', v.title, #v), value = helpers.markdown(field)})
 		end
 	end
 
@@ -1028,31 +806,6 @@ cmds['members'] = {function(arg, msg)
 	}
 
 end, 'Shows members that match a specific query.'}
-
-local function quote(message)
-
-	local channel = message.channel
-	local guild = channel.guild
-
-	local member = guild and guild.members:get(message.author.id)
-	local color = member and member:getColor().value or 0
-
-	return {
-		embed = {
-			author = {
-				name = message.author.username,
-				icon_url = message.author.avatarURL,
-			},
-			description = message.content,
-			footer = {
-				text = f('#%s in %s', channel.name, guild.name),
-			},
-			timestamp = message.timestamp,
-			color = color > 0 and color or nil,
-		}
-	}
-
-end
 
 cmds['quotelink'] = {function(_, msg)
 
@@ -1077,7 +830,7 @@ cmds['quotelink'] = {function(_, msg)
 
 			local message = assert(channel:getMessage(messageId) or channel:getMessagesAfter(messageId, 1):iter()())
 
-			return quote(message)
+			return helpers.makeQuote(message)
 
 		end
 
@@ -1103,14 +856,14 @@ cmds['quote'] = {function(arg, msg)
 
 		local message = assert(channel:getMessage(messageId))
 
-		return quote(message)
+		return helpers.makeQuote(message)
 
 	else
 
 		messageId = arg:match('%d+')
 		if messageId then
 			local message = assert(msg.channel:getMessage(messageId))
-			return quote(message)
+			return helpers.makeQuote(message)
 		end
 
 	end
