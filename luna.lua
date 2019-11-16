@@ -1,12 +1,12 @@
 local fs = require('fs')
 local json = require('json')
-local modules = require('./modules')
 local discordia = require('discordia')
 
 local cfg = json.decode(fs.readFileSync('config.json'))
 
 discordia.extensions()
-modules()
+local loader = require('./loader')
+local modules = loader.modules
 
 local client = discordia.Client {
 	cacheAllMembers = true,
