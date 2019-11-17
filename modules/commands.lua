@@ -8,7 +8,6 @@ local insert, concat, sort = table.insert, table.concat, table.sort
 
 local clamp = math.clamp -- luacheck: ignore
 local pack = table.pack -- luacheck: ignore
-local levenshtein = utf8.levenshtein or string.levenshtein -- luacheck: ignore
 local loader = loader -- luacheck: ignore
 
 local Date = discordia.Date
@@ -624,7 +623,7 @@ cmds['steal'] = {function(arg, msg)
 	end
 
 	local function levensort(a, b)
-		return levenshtein(a[1], arg) < levenshtein(b[1], arg)
+		return helpers.levenshtein(a[1], arg) < helpers.levenshtein(b[1], arg)
 	end
 
 	local emoji
@@ -755,18 +754,18 @@ cmds['members'] = {function(arg, msg)
 		local username = member.username
 		local loweredUsername = username:lower()
 		if loweredUsername:find(lowered) then
-			insert(matches[1], {member, levenshtein(username, arg)})
+			insert(matches[1], {member, helpers.levenshtein(username, arg)})
 		else
-			insert(matches[2], {member, levenshtein(username, arg)})
+			insert(matches[2], {member, helpers.levenshtein(username, arg)})
 		end
 
 		local nickname = member.nickname
 		if nickname then
 			local loweredNickname = nickname:lower()
 			if loweredNickname:find(lowered) then
-				insert(matches[3], {member, levenshtein(nickname, arg)})
+				insert(matches[3], {member, helpers.levenshtein(nickname, arg)})
 			else
-				insert(matches[4], {member, levenshtein(nickname, arg)})
+				insert(matches[4], {member, helpers.levenshtein(nickname, arg)})
 			end
 		end
 

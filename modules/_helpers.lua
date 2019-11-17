@@ -2,10 +2,10 @@ local discordia = require('discordia')
 local http = require('coro-http')
 local pp = require('pretty-print')
 
-local max = math.max
+local min, max = math.min, math.max
 local f = string.format
 local insert, concat, sort = table.insert, table.concat, table.sort
-local levenshtein = utf8.levenshtein or string.levenshtein -- luacheck: ignore
+local utf8_len, utf8_codes = utf8.len, utf8.codes
 local dump = pp.dump
 
 local Date, Time = discordia.Date, discordia.Time
@@ -14,6 +14,42 @@ local zero = {__index = function() return 0 end}
 
 local function zeroTable()
 	return setmetatable({}, zero)
+end
+
+local function levenshtein(str1, str2)
+
+	if str1 == str2 then return 0 end
+
+	local len1 = utf8_len(str1)
+	local len2 = utf8_len(str2)
+
+	if len1 == 0 then
+		return len2
+	elseif len2 == 0 then
+		return len1
+	end
+
+	local matrix = {}
+	for i = 0, len1 do
+		matrix[i] = {[0] = i}
+	end
+	for j = 0, len2 do
+		matrix[0][j] = j
+	end
+
+	local i = 1
+	for _, a in utf8_codes(str1) do
+		local j = 1
+		for _, b in utf8_codes(str2) do
+			local cost = a == b and 0 or 1
+			matrix[i][j] = min(matrix[i-1][j] + 1, matrix[i][j-1] + 1, matrix[i-1][j-1] + cost)
+			j = j + 1
+		end
+		i = i + 1
+	end
+
+	return matrix[len1][len2]
+
 end
 
 local function markdown(tbl)
@@ -267,6 +303,7 @@ local function makeQuote(message)
 end
 
 return {
+	levenshtein = levenshtein,
 	markdown = markdown,
 	searchMember = searchMember,
 	zeroTable = zeroTable,
