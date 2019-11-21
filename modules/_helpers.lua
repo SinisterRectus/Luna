@@ -302,6 +302,54 @@ local function makeQuote(message)
 
 end
 
+local converters = {}
+
+converters['km'] = function(n) return n * 0.621, 'mi' end
+converters['m'] = function(n) return n * 3.28, 'ft' end
+converters['mi'] = function(n) return n * 1.61, 'km' end
+converters['ft'] = function(n) return n * 0.3048, 'm' end
+converters['in'] = function(n) return n * 2.54, 'cm' end
+converters['cm'] = function(n) return n * 0.394, 'in' end
+converters['kg'] = function(n) return n * 2.2, 'lb' end
+converters['lb'] = function(n) return n * 0.45, 'kg' end
+converters['F'] = function(n) return (n - 32) * 5/9, '°C' end
+converters['C'] = function(n) return n * 9/5 + 32, '°F' end
+
+local aliases = {
+	['km'] = {'kilometer', 'kilometers', 'kilometre', 'kilometres'},
+	['m'] = {'meter', 'meters'},
+	['mi'] = {'mile', 'miles'},
+	['ft'] = {'feet', 'foot'},
+	['in'] = {'inch', 'inches'},
+	['cm'] = {'centimeter', 'centimeters', 'centimetre', 'centimetres'},
+	['kg'] = {'kilogram', 'kilograms'},
+	['lb'] = {'pounds', 'lbs'},
+	['F'] = {'degF', '°F', 'fahrenheit', 'degreesF'},
+	['C'] = {'degC', '°C', 'celcius', 'degreesC', 'centigrade'},
+}
+
+for k, v in pairs(aliases) do
+	assert(converters[k])
+	for _, w in ipairs(v) do
+		assert(not w:find('%s'), w)
+		converters[w] = converters[k]
+	end
+end
+
+local function convert(fields, d, u)
+	d = d:gsub(',', '')
+	d = tonumber(d)
+	if d then
+		local converter = converters[u] or converters[u:lower()]
+		if converter then
+			return insert(fields, {
+				f('%g %s', d, u),
+				f('%g %s', converter(d)),
+			})
+		end
+	end
+end
+
 return {
 	levenshtein = levenshtein,
 	markdown = markdown,
@@ -318,4 +366,5 @@ return {
 	printLine = printLine,
 	prettyLine = prettyLine,
 	makeQuote = makeQuote,
+	convert = convert,
 }

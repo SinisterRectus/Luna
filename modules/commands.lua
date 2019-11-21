@@ -869,6 +869,31 @@ cmds['quote'] = {function(arg, msg)
 
 end, 'Shows a quote based on the provided [message id] or [channel id] [message id]'}
 
+cmds['convert'] = {function(arg, msg)
+
+	local fields = {[0] = {'Input', 'Output'}}
+	local pattern = '([%d%.,]+)%s-(%S+)'
+
+	if arg and arg:find(pattern) then
+		local d, u = arg:match(pattern)
+		helpers.convert(fields, d, u)
+	else
+		local bot = msg.client.user
+		for message in msg.channel:getMessages(20):findAll(function(m) return m.author ~= bot end) do
+			for d, u in message.content:gmatch(pattern) do
+				helpers.convert(fields, d, u)
+			end
+		end
+	end
+
+	if #fields > 0 then
+		return helpers.markdown(fields)
+	else
+		return 'No units to convert found'
+	end
+
+end, 'Scans the chat for different values and displays conversions where possible.'}
+
 return {
 	onMessageCreate = onMessageCreate,
 	onMessageDelete = onMessageDelete,
