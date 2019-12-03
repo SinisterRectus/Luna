@@ -18,8 +18,10 @@ function loader.unload(name)
 	if loader.modules[name] then
 		loader.modules[name] = nil
 		print('Module unloaded: ' .. name)
+		return true
 	else
 		print('Unknown module: ' .. name)
+		return false
 	end
 end
 
@@ -34,9 +36,11 @@ function loader.load(name)
 
 	if success then
 		print('Module loaded: ' .. name)
+		return loader.modules[name]
 	else
 		print('Module not loaded: ' .. name)
 		print(err)
+		return nil
 	end
 
 end
