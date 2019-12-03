@@ -894,6 +894,28 @@ cmds['convert'] = {function(arg, msg)
 
 end, 'Scans the chat for different values and displays conversions where possible.'}
 
+cmds['load'] = {function(arg, msg)
+	if msg.author == msg.client.owner then
+		if loader.load(arg) then
+			return msg:addReaction('✅')
+		else
+			return msg:addReaction('❌')
+		end
+	end
+end, 'Loads or reloads a module. Owner only.'}
+
+cmds['unload'] = {function(arg, msg)
+	if msg.author == msg.client.owner then
+		if loader.unload(arg) then
+			return msg:addReaction('✅')
+		else
+			return msg:addReaction('❌')
+		end
+	end
+end, 'Unloads a module. Owner only.'}
+
+cmds['reload'] = cmds['load']
+
 return {
 	onMessageCreate = onMessageCreate,
 	onMessageDelete = onMessageDelete,
