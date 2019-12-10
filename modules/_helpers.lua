@@ -324,8 +324,8 @@ local aliases = {
 	['cm'] = {'centimeter', 'centimeters', 'centimetre', 'centimetres'},
 	['kg'] = {'kilogram', 'kilograms'},
 	['lb'] = {'pounds', 'lbs'},
-	['F'] = {'degF', '°F', 'fahrenheit', 'degreesF'},
-	['C'] = {'degC', '°C', 'celcius', 'degreesC', 'centigrade'},
+	['F'] = {'degF', '°F', 'fahrenheit', 'degreesF', '*F'},
+	['C'] = {'degC', '°C', 'celcius', 'degreesC', 'centigrade', '*C'},
 }
 
 for k, v in pairs(aliases) do

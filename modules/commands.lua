@@ -872,7 +872,7 @@ end, 'Shows a quote based on the provided [message id] or [channel id] [message 
 cmds['convert'] = {function(arg, msg)
 
 	local fields = {[0] = {'Input', 'Output'}}
-	local pattern = '([%d%.,]+)%s-(%S+)'
+	local pattern = '(%-?[%d%.,]+)%s-(%S+)'
 
 	if arg and arg:find(pattern) then
 		local d, u = arg:match(pattern)
