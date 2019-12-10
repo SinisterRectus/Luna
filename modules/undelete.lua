@@ -1,8 +1,6 @@
-local LOG_CHANNEL = '609046553474236416'
-
 local guilds = {
-	['81384788765712384'] = true, -- Discord API
-	['377572091869790210'] = true, -- Luvit.io
+	['81384788765712384'] = '652568709562499072', -- Discord API
+	['377572091869790210'] = '652568730672431137', -- Luvit.io
 }
 
 local f = string.format
@@ -14,9 +12,12 @@ return function(message)
 	if #message.content == 0 then return end
 
 	local guild = message.guild
-	if not guild or not guilds[guild.id] then return end
+	if not guild then return end
 
-	local log = message.client:getChannel(LOG_CHANNEL)
+	local id = guilds[guild.id]
+	if not id then return end
+
+	local log = message.client:getChannel(id)
 	if not log then return end
 
 	local channel = message.channel
@@ -27,9 +28,6 @@ return function(message)
 			author = {
 				name = author.tag,
 				icon_url = author.avatarURL,
-			},
-			thumbnail = {
-				url = guild.iconURL,
 			},
 			title = 'Message Deleted',
 			description = message.content,
