@@ -566,7 +566,10 @@ cmds['listening'] = {function(arg, msg)
 		end
 
 		local fields = {
-			{name = track, value = f('by %s on %s', artist, album)},
+			-- {name = track, value = f('by %s on %s', artist, album)},
+			{name = 'Track', value = track},
+			{name = 'Album', value = album},
+			{name = 'Artist', value = artist},
 		}
 
 		if #other.artists > 0 then
@@ -806,68 +809,94 @@ cmds['members'] = {function(arg, msg)
 
 end, 'Shows members that match a specific query.'}
 
-cmds['quotelink'] = {function(_, msg)
-
-	local messages = msg.channel:getMessages():toArray('id')
-	local client = msg.client
-
-	for i = #messages, 1, -1 do
-
-		local m = messages[i]
-		local guildId, channelId, messageId = m.content:match('https://.-%.?discordapp.com/channels/(%d+)/(%d+)/(%d+)')
-
-		if guildId and channelId and messageId then
-
-			local guild = assert(client:getGuild(guildId), 'unknown guild')
-			local channel = assert(guild:getChannel(channelId), 'unknown channel')
-			local bot = assert(guild:getMember(client.user))
-
-			assert(bot:hasPermission(channel, 'readMessages'), 'missing read permission')
-			assert(bot:hasPermission(channel, 'readMessageHistory'), 'missing read permission')
-			assert(msg.member:hasPermission(channel, 'readMessages'), 'missing read permission')
-			assert(msg.member:hasPermission(channel, 'readMessageHistory'), 'missing read permission')
-
-			local message = assert(channel:getMessage(messageId) or channel:getMessagesAfter(messageId, 1):iter()())
-
-			return helpers.makeQuote(message)
-
+local function findSnowflakes(content)
+	if content and content:find('%d') then
+		local ids = {}
+		for id in content:gmatch('%d+') do
+			insert(ids, id)
 		end
-
+		local n = #ids
+		if n == 1 then
+			return nil, nil, ids[1]
+		elseif n == 2 then
+			return nil, ids[1], ids[2]
+		elseif n == 3 then
+			return ids[1], ids[2], ids[3]
+		end
 	end
-
-end, 'Shows the content of the most recent message link.'}
+end
 
 cmds['quote'] = {function(arg, msg)
 
-	local client = msg.client
-
-	local channelId, messageId = arg:match('(%d+)%D+(%d+)')
-
-	if messageId and channelId then
-
-		local channel = assert(client:getChannel(channelId), 'unknown channel')
-		local bot = assert(msg.guild:getMember(client.user))
-
-		assert(bot:hasPermission(channel, 'readMessages'), 'missing read permission')
-		assert(bot:hasPermission(channel, 'readMessageHistory'), 'missing read permission')
-		assert(msg.member:hasPermission(channel, 'readMessages'), 'missing read permission')
-		assert(msg.member:hasPermission(channel, 'readMessageHistory'), 'missing read permission')
-
-		local message = assert(channel:getMessage(messageId))
-
-		return helpers.makeQuote(message)
-
-	else
-
-		messageId = arg:match('%d+')
-		if messageId then
-			local message = assert(msg.channel:getMessage(messageId))
-			return helpers.makeQuote(message)
+	local guildId, channelId, messageId
+	if arg then
+		guildId, channelId, messageId = arg:match('https://.-discordapp.com/channels/(%d+)/(%d+)/(%d+)')
+		if not messageId then
+			guildId, channelId, messageId = findSnowflakes(arg)
 		end
-
 	end
 
-end, 'Shows a quote based on the provided [message id] or [channel id] [message id]'}
+	if not messageId then
+		local messages = msg.channel:getMessages():toArray('id')
+		for i = # messages, 1, -1 do
+			guildId, channelId, messageId = messages[i].content:match('https://.-discordapp.com/channels/(%d+)/(%d+)/(%d+)')
+			if messageId then break end
+		end
+	end
+
+	if not messageId then
+		return "No message Id found."
+	end
+
+	local client = msg.client
+	local guild, channel
+
+	if guildId then
+		guild = assert(client:getGuild(guildId), 'unknown guild: ' .. guildId)
+	else
+		guild = msg.guild
+	end
+
+	if channelId then
+		channel = assert(guild:getChannel(channelId), 'unknown channel: ' .. channelId)
+	else
+		channel = msg.channel
+	end
+
+	local bot = assert(guild:getMember(client.user))
+	assert(bot:hasPermission(channel, 'readMessages'), 'missing read permission')
+	assert(bot:hasPermission(channel, 'readMessageHistory'), 'missing read permission')
+	assert(msg.member:hasPermission(channel, 'readMessages'), 'missing read permission')
+	assert(msg.member:hasPermission(channel, 'readMessageHistory'), 'missing read permission')
+
+	local message = channel:getMessage(messageId)
+	if not message then
+		local messages = channel:getMessagesAfter(messageId, 1)
+		message = messages and messages:iter()()
+	end
+	assert(message, 'unknown message: ' .. messageId)
+
+	local member = guild and guild.members:get(message.author.id)
+	local color = member and member:getColor().value or 0
+
+	return {
+		embed = {
+			author = {
+				name = message.author.username,
+				icon_url = message.author.avatarURL,
+			},
+			description = message.content,
+			footer = {
+				text = f('#%s in %s', channel.name, guild.name),
+			},
+			timestamp = message.timestamp,
+			color = color > 0 and color or nil,
+		}
+	}
+
+end, 'Shows the content of the most recently linked message or a valid ID tuple.'}
+
+cmds['quotelink'] = cmds['quote']
 
 cmds['convert'] = {function(arg, msg)
 

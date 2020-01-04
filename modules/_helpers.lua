@@ -277,31 +277,6 @@ local function prettyLine(...)
 	return concat(ret, '\t')
 end
 
-local function makeQuote(message)
-
-	local channel = message.channel
-	local guild = channel.guild
-
-	local member = guild and guild.members:get(message.author.id)
-	local color = member and member:getColor().value or 0
-
-	return {
-		embed = {
-			author = {
-				name = message.author.username,
-				icon_url = message.author.avatarURL,
-			},
-			description = message.content,
-			footer = {
-				text = f('#%s in %s', channel.name, guild.name),
-			},
-			timestamp = message.timestamp,
-			color = color > 0 and color or nil,
-		}
-	}
-
-end
-
 local converters = {}
 
 converters['km'] = function(n) return n * 0.621, 'mi' end
@@ -365,6 +340,5 @@ return {
 	getAlbumCover = getAlbumCover,
 	printLine = printLine,
 	prettyLine = prettyLine,
-	makeQuote = makeQuote,
 	convert = convert,
 }
