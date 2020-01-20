@@ -3,7 +3,7 @@ local fs = require('fs')
 local http = require('coro-http')
 
 local random, max = math.random, math.max
-local f, upper = string.format, string.upper
+local f, upper, format = string.format, string.upper, string.format
 local insert, concat, sort = table.insert, table.concat, table.sort
 
 local clamp = math.clamp -- luacheck: ignore
@@ -679,21 +679,90 @@ cmds['emojify'] = {function(arg, msg)
 
 end, 'Bot owner only. Converts a member avatar into an emoji.'}
 
-cmds['rate'] = {function(arg, msg)
+cmds['stats'] = {function(_, msg)
 
-	local n = tonumber(arg)
-	n = n and clamp(arg, 2, 100) or 100
+	local channel = msg.channel
+	local messages = channel:getMessages(100):toArray('id')
+	local t = messages[#messages]:getDate() - messages[1]:getDate()
+	local n = #messages
 
-	local m = msg.channel:getMessages(n):toArray('id')
-	n = #m
+	local description = {
+		format('%i messages in %s', n, t:toString()),
+		format('%g messages per minute or %g seconds per message', n / t:toMinutes(), t:toSeconds() / n),
+	}
 
-	local t = Date.fromSnowflake(m[1].id) - Date.fromSnowflake(m[n].id)
+	local totals = {
+		{'Messages', 0},
+		{'Characters', 0},
+		{'Attachments', 0},
+		{'Embeds', 0},
+		{'Mentions Sent', 0},
+		{'Mentions Received', 0},
+	}
 
-	local content = '%s message rate: **%g** per minute, or 1 every **%g** seconds, measured for the previous **%i**'
+	local authors = setmetatable({}, {
+		__index = function(self, k)
+		self[k] = {0, 0, 0, 0, 0, 0}
+		return self[k]
+	end})
 
-	return f(content, msg.channel.mentionString, n / t:toMinutes(), t:toSeconds() / n, n)
+	for _, message in ipairs(messages) do
 
-end, 'Shows the current rate of channel messages.'}
+		local v = authors[message.author.id]
+
+		v[1] = v[1] + 1
+		v[2] = v[2] + utf8.len(message.content)
+
+		if message.attachments then
+			v[3] = v[3] + 1
+		end
+
+		if message.embeds then
+			v[4] = v[4] + 1
+		end
+
+		for mention in message.mentionedUsers:iter() do
+			v[5] = v[5] + 1
+			authors[mention.id][6] = authors[mention.id][6] + 1
+		end
+
+	end
+
+	local stats = {{}, {}, {}, {}, {}, {}}
+	local fields = {}
+
+	for i, w in ipairs(stats) do
+		for k, v in pairs(authors) do
+			if v[i] > 0 then
+				totals[i][2] = totals[i][2] + v[i]
+				insert(w, {k, v[i]})
+			end
+		end
+		sort(w, function(a, b) return a[2] > b[2] end)
+	end
+
+	for i, v in ipairs(stats) do
+		for j, w in ipairs(v) do
+			v[j] = format('%i. <@%s> %i', j, w[1], w[2])
+		end
+		if #v > 0 then
+			insert(fields, {
+				name = format('%s (%i)', totals[i][1], totals[i][2]),
+				value = concat(v, '\n', 1, math.min(#v, 10)), -- show top 10
+				inline = true
+			})
+		end
+	end
+
+	return {
+		embed = {
+			title = format('Recent Channel Statistics for #%s in %s', channel.name, channel.guild.name),
+			description = concat(description, '\n'),
+			fields = fields,
+		}
+	}
+
+end, 'Shows statistics for recent messages.'}
 
 cmds['cleanup'] = {function(_, msg)
 
@@ -944,6 +1013,26 @@ cmds['unload'] = {function(arg, msg)
 end, 'Unloads a module. Owner only.'}
 
 cmds['reload'] = cmds['load']
+
+cmds['permissions'] = {function(arg, msg)
+
+	local obj = tonumber(arg) and msg.guild:getRole(arg) or helpers.searchMember(msg, arg)
+	if not obj then return end
+
+
+	local tbl = {[0] = {'Channel', 'Denied'}}
+
+	local channels = msg.guild.textChannels:toArray('position')
+
+	for _, channel in ipairs(channels) do
+		local o = channel:getPermissionOverwriteFor(obj)
+		local denied = concat(o:getDeniedPermissions():toArray(), ', ')
+		insert(tbl, {channel.name, denied})
+	end
+
+	return helpers.markdown(tbl)
+
+end, ''}
 
 return {
 	onMessageCreate = onMessageCreate,
