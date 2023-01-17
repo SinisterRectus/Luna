@@ -4,13 +4,16 @@ local discordia = require('discordia')
 
 local cfg = json.decode(fs.readFileSync('config.json'))
 
-discordia.extensions()
 local loader = require('./loader')
 local modules = loader.modules
+
+loader.loadAll()
 
 local client = discordia.Client {
 	cacheAllMembers = true,
 }
+
+client:enableAllIntents()
 
 local clock = discordia.Clock()
 
@@ -37,10 +40,6 @@ client:on('messageCreate', function(msg)
 
 	if modules.commands then
 		modules.commands.onMessageCreate(msg)
-	end
-
-	if modules.acronym then
-		modules.acronym(msg)
 	end
 
 	if modules.antispam then

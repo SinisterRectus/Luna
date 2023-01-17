@@ -1,14 +1,14 @@
 local discordia = require('discordia')
 local fs = require('fs')
 local http = require('coro-http')
+local loader = require('./loader')
 
+local ext = discordia.extensions
 local random, max = math.random, math.max
 local f, upper, format = string.format, string.upper, string.format
-local insert, concat, sort = table.insert, table.concat, table.sort
-
-local clamp = math.clamp -- luacheck: ignore
-local pack = table.pack -- luacheck: ignore
-local loader = loader -- luacheck: ignore
+local insert, concat, sort, pack = table.insert, table.concat, table.sort, table.pack
+local clamp = ext.math.clamp
+local pad = ext.string.pad
 
 local Date = discordia.Date
 
@@ -20,7 +20,7 @@ local DISCORDIA_SUBS = '238388552663171072'
 local BOOSTER_COLOR = 0xF47FFF
 local SPOTIFY_GREEN = 0x1ED760
 
-local helpers = loader.load('_helpers')
+local helpers = assert(loader.load('_helpers'))
 
 local prefix = '~~'
 local function parseContent(content)
@@ -230,9 +230,9 @@ cmds['colors'] = {function(_, msg)
 		local row = f('%s | %s | %s | %s | %s',
 			role.name:pad(len, 'right'),
 			c:toHex(),
-			tostring(c.r):pad(3, 'right'),
-			tostring(c.g):pad(3, 'right'),
-			tostring(c.b):pad(3, 'right')
+			pad(tostring(c.r), 3, 'right'),
+			pad(tostring(c.g), 3, 'right'),
+			pad(tostring(c.b), 3, 'right')
 		)
 		insert(ret, row)
 	end
@@ -254,7 +254,8 @@ cmds['poop'] = {function(arg, msg)
 	local member = helpers.searchMember(msg, arg)
 	if not member then return end
 
-	if author.highestRole.position > member.highestRole.position then
+	local pos = member.highestRole.position
+	if author.highestRole.position > pos and guild.me.highestRole.position > pos then
 		if member:setNickname('💩') then
 			return msg:addReaction('✅')
 		end
@@ -444,7 +445,7 @@ cmds['discrims'] = {function(arg, msg)
 	local counts = helpers.zeroTable()
 
 	for member in msg.guild.members:iter() do
-		local d = tonumber(member.discriminator)
+		local d = tonumber(member.discriminator) or 0
 		counts[d] = counts[d] + 1
 	end
 
@@ -566,7 +567,6 @@ cmds['listening'] = {function(arg, msg)
 		end
 
 		local fields = {
-			-- {name = track, value = f('by %s on %s', artist, album)},
 			{name = 'Track', value = track},
 			{name = 'Album', value = album},
 			{name = 'Artist', value = artist},
@@ -646,10 +646,8 @@ cmds['steal'] = {function(arg, msg)
 			if res.code == 200 then
 				local filename = f('temp.%s', ext)
 				fs.writeFileSync(filename, data) -- hack for now
-				emoji = guild:createEmoji(emoji[1], filename)
-				if emoji then
+				emoji = assert(guild:createEmoji(emoji[1], filename))
 					return f("Emoji %s stolen!", emoji.mentionString)
-				end
 			end
 		end
 	end
@@ -681,7 +679,7 @@ end, 'Bot owner only. Converts a member avatar into an emoji.'}
 
 cmds['stats'] = {function(_, msg)
 
-	local channel = msg.channel
+	local channel = msg.mentionedChannels.first or msg.channel
 	local messages = channel:getMessages(100):toArray('id')
 	local t = messages[#messages]:getDate() - messages[1]:getDate()
 	local n = #messages
@@ -792,9 +790,8 @@ local json = require('json')
 
 cmds['msg'] = {function(arg, msg)
 
-	if not tonumber(arg) then return end
-
-	local data = msg.client._api:getChannelMessage(msg.channel.id, arg)
+	local message = helpers.findMessage(arg, msg)
+	local data = msg.client._api:getChannelMessage(message.channel.id, message.id)
 
 	return {
 		content = json.encode(data, {indent = true}),
@@ -878,75 +875,12 @@ cmds['members'] = {function(arg, msg)
 
 end, 'Shows members that match a specific query.'}
 
-local function findSnowflakes(content)
-	if content and content:find('%d') then
-		local ids = {}
-		for id in content:gmatch('%d+') do
-			insert(ids, id)
-		end
-		local n = #ids
-		if n == 1 then
-			return nil, nil, ids[1]
-		elseif n == 2 then
-			return nil, ids[1], ids[2]
-		elseif n == 3 then
-			return ids[1], ids[2], ids[3]
-		end
-	end
-end
-
 cmds['quote'] = {function(arg, msg)
 
-	local guildId, channelId, messageId
-	if arg then
-		guildId, channelId, messageId = arg:match('https://.-discordapp.com/channels/(%d+)/(%d+)/(%d+)')
-		if not messageId then
-			guildId, channelId, messageId = findSnowflakes(arg)
-		end
-	end
+	local message, channel, guild = helpers.findMessage(arg, msg)
 
-	if not messageId then
-		local messages = msg.channel:getMessages():toArray('id')
-		for i = # messages, 1, -1 do
-			guildId, channelId, messageId = messages[i].content:match('https://.-discordapp.com/channels/(%d+)/(%d+)/(%d+)')
-			if messageId then break end
-		end
-	end
-
-	if not messageId then
-		return "No message Id found."
-	end
-
-	local client = msg.client
-	local guild, channel
-
-	if guildId then
-		guild = assert(client:getGuild(guildId), 'unknown guild: ' .. guildId)
-	else
-		guild = msg.guild
-	end
-
-	if channelId then
-		channel = assert(guild:getChannel(channelId), 'unknown channel: ' .. channelId)
-	else
-		channel = msg.channel
-	end
-
-	local bot = assert(guild:getMember(client.user))
-	assert(bot:hasPermission(channel, 'readMessages'), 'missing read permission')
-	assert(bot:hasPermission(channel, 'readMessageHistory'), 'missing read permission')
-	assert(msg.member:hasPermission(channel, 'readMessages'), 'missing read permission')
-	assert(msg.member:hasPermission(channel, 'readMessageHistory'), 'missing read permission')
-
-	local message = channel:getMessage(messageId)
-	if not message then
-		local messages = channel:getMessagesAfter(messageId, 1)
-		message = messages and messages:iter()()
-	end
-	assert(message, 'unknown message: ' .. messageId)
-
-	local member = guild and guild.members:get(message.author.id)
-	local color = member and member:getColor().value or 0
+	local author = guild:getMember(message.author)
+	local color = author and author:getColor().value or 0
 
 	return {
 		embed = {
@@ -956,16 +890,14 @@ cmds['quote'] = {function(arg, msg)
 			},
 			description = message.content,
 			footer = {
-				text = f('#%s in %s', channel.name, guild.name),
+				text = guild and f('#%s in %s', channel.name, guild.name) or 'Private Channel',
 			},
 			timestamp = message.timestamp,
 			color = color > 0 and color or nil,
 		}
 	}
 
-end, 'Shows the content of the most recently linked message or a valid ID tuple.'}
-
-cmds['quotelink'] = cmds['quote']
+end, 'Shows the content of the most recently linked message or a message ID or channel-message ID pair.'}
 
 cmds['convert'] = {function(arg, msg)
 
@@ -973,8 +905,9 @@ cmds['convert'] = {function(arg, msg)
 	local pattern = '(%-?[%d%.,]+)%s-(%S+)'
 
 	if arg and arg:find(pattern) then
-		local d, u = arg:match(pattern)
+		for d, u in arg:gmatch(pattern) do
 		helpers.convert(fields, d, u)
+		end
 	else
 		local bot = msg.client.user
 		for message in msg.channel:getMessages(20):findAll(function(m) return m.author ~= bot end) do
@@ -1014,25 +947,62 @@ end, 'Unloads a module. Owner only.'}
 
 cmds['reload'] = cmds['load']
 
-cmds['permissions'] = {function(arg, msg)
+cmds['boomers'] = {function(_, msg)
+	return helpers.getCreatedJoinedCharts(msg.guild)
+end, 'Shows the oldest members in the current guild by creation and joined date.'}
 
-	local obj = tonumber(arg) and msg.guild:getRole(arg) or helpers.searchMember(msg, arg)
-	if not obj then return end
+cmds['zoomers'] = {function(_, msg)
+	return helpers.getCreatedJoinedCharts(msg.guild, true)
+end, 'Shows the newest members in the current guild by creation and joined date.'}
 
+cmds['idk'] = {function(arg, msg)
 
-	local tbl = {[0] = {'Channel', 'Denied'}}
+	local n = 2
+	local fmt = '!%F %T'
 
-	local channels = msg.guild.textChannels:toArray('position')
+	local membersCreated, membersJoined = helpers.getCreatedJoinedMembers(msg.guild)
+	local member = arg and helpers.searchMember(msg, arg) or msg.guild:getMember(msg.author.id)
 
-	for _, channel in ipairs(channels) do
-		local o = channel:getPermissionOverwriteFor(obj)
-		local denied = concat(o:getDeniedPermissions():toArray(), ', ')
-		insert(tbl, {channel.name, denied})
+	local created = {[0] = {'', 'User', 'Created'}}
+	local j
+	for i, v in ipairs(membersCreated) do
+		if v == member then
+			j = i
+			break
+		end
 	end
 
-	return helpers.markdown(tbl)
+	for i = j - n, j + n do
+		local m = membersCreated[i]
+		if m then
+			local d = m:getDate()
+			insert(created, {i, m.tag, d:toString(fmt)})
+		end
+	end
 
-end, ''}
+	local joined = {[0] = {'', 'User', 'Joined'}}
+	for i, v in ipairs(membersJoined) do
+		if v == member then
+			j = i
+			break
+		end
+	end
+
+	for i = j - n, j + n do
+		local m = membersJoined[i]
+		if m then
+			local d = Date.fromISO(m.joinedAt)
+			insert(joined, {i, m.tag, d:toString(fmt)})
+		end
+	end
+
+	return helpers.markdown(created) .. '\n' .. helpers.markdown(joined)
+
+end, 'Shows your creation and joined at positions.'}
+
+cmds['snowflake'] = {function(arg)
+	return tonumber(arg) and Date.fromSnowflake(arg):toISO(' ', '') or "No integer found"
+end, 'Displays the date for a given snowflake ID.'}
 
 return {
 	onMessageCreate = onMessageCreate,

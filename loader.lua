@@ -11,7 +11,6 @@ local loader = {modules = {}}
 
 local env = setmetatable({
 	require = require, -- inject luvit's custom require
-	loader = loader, -- inject this module
 }, {__index = _G})
 
 function loader.unload(name)
@@ -30,7 +29,7 @@ function loader.load(name)
 	local success, err = pcall(function()
 		local path = pathJoin(DIR, name) .. '.lua'
 		local code = assert(readFileSync(path))
-		local fn = assert(loadstring(code, '@' .. name, 't', env))
+		local fn = assert(load(code, '@' .. name, 't', env))
 		loader.modules[name] = fn() or {}
 	end)
 
@@ -45,6 +44,17 @@ function loader.load(name)
 
 end
 
+function loader.loadAll()
+	for k, v in scandirSync(DIR) do
+		if v == 'file' then
+			local name = k:match('(.*)%.lua')
+			if name and name:find('_') ~= 1 then
+				loader.load(name)
+			end
+		end
+	end
+end
+
 _G.process.stdin:on('data', function(data)
 	local cmd, name = data:match('(%S+)%s+(%S+)')
 	if not cmd then return end
@@ -54,14 +64,5 @@ _G.process.stdin:on('data', function(data)
 		return loader.unload(name)
 	end
 end)
-
-for k, v in scandirSync(DIR) do
-	if v == 'file' then
-		local name = k:match('(.*)%.lua')
-		if name and name:find('_') ~= 1 then
-			loader.load(name)
-		end
-	end
-end
 
 return loader

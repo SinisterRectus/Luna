@@ -289,6 +289,8 @@ converters['kg'] = function(n) return n * 2.2, 'lb' end
 converters['lb'] = function(n) return n * 0.45, 'kg' end
 converters['F'] = function(n) return (n - 32) * 5/9, '°C' end
 converters['C'] = function(n) return n * 9/5 + 32, '°F' end
+converters['L'] = function(n) return n * 0.2642, 'gal' end
+converters['gal'] = function(n) return n * 3.785, 'L' end
 
 local aliases = {
 	['km'] = {'kilometer', 'kilometers', 'kilometre', 'kilometres'},
@@ -299,8 +301,10 @@ local aliases = {
 	['cm'] = {'centimeter', 'centimeters', 'centimetre', 'centimetres'},
 	['kg'] = {'kilogram', 'kilograms'},
 	['lb'] = {'pounds', 'lbs'},
-	['F'] = {'degF', '°F', 'fahrenheit', 'degreesF', '*F'},
-	['C'] = {'degC', '°C', 'celcius', 'degreesC', 'centigrade', '*C'},
+	['F'] = {'degF', '°F', 'fahrenheit', 'degreesF', '*F', 'F', 'f'},
+	['C'] = {'degC', '°C', 'celcius', 'degreesC', 'centigrade', '*C', 'C', 'c'},
+	['L'] = {'l', 'liters', 'liter', 'litres', 'litre'},
+	['gal'] = {'gallon', 'gallons'},
 }
 
 for k, v in pairs(aliases) do
@@ -325,6 +329,102 @@ local function convert(fields, d, u)
 	end
 end
 
+local membersCache = setmetatable({}, {__mode = 'v'})
+local function getCreatedJoinedMembers(guild)
+	local a = membersCache[1] or guild.members:toArray('id')
+	local b = membersCache[2] or guild.members:toArray('joinedAt')
+	membersCache[1] = a
+	membersCache[2] = b
+	return a, b
+end
+
+local function getCreatedJoinedCharts(guild, reverse)
+
+	local n = 5
+	local fmt = '!%F %T'
+	local membersCreated, membersJoined = getCreatedJoinedMembers(guild)
+	local start, stop
+
+	local created = {[0] = {'', 'User', 'Created'}}
+	start = reverse and max(1, #membersCreated - n) or 1
+	stop = reverse and #membersCreated or n
+
+	for i = start, stop do
+		if not membersCreated[i] then break end
+		local d = membersCreated[i]:getDate()
+		insert(created, {i, membersCreated[i].tag, d:toString(fmt)})
+	end
+
+	local joined = {[0] = {'', 'User', 'Joined'}}
+	start = reverse and max(1, #membersJoined - n) or 1
+	stop = reverse and #membersJoined or n
+
+	for i = start, stop do
+		if not membersJoined[i] then break end
+		local d = Date.fromISO(membersJoined[i].joinedAt)
+		insert(joined, {i, membersJoined[i].tag, d:toString(fmt)})
+	end
+
+	return markdown(created) .. '\n' .. markdown(joined)
+
+end
+
+local function findMessage(arg, msg)
+
+	local channelId, messageId
+	local pattern = 'https://.-discorda?p?p?.com/channels/%d+/(%d+)/(%d+)'
+
+	if arg then -- try command arguments
+		channelId, messageId = arg:match(pattern)
+		if not messageId then
+			local ids = {}
+			for id in arg:gmatch('%d+') do
+				insert(ids, id)
+			end
+			if #ids == 1 then
+				messageId = ids[1]
+			elseif #ids == 2 then
+				channelId, messageId = ids[1], ids[2]
+			end
+		end
+	end
+
+	if not messageId then -- search previous messages
+		local messages = msg.channel:getMessages():toArray('id')
+		for i = #messages, 1, -1 do
+			channelId, messageId = messages[i].content:match(pattern)
+			if messageId then break end
+		end
+	end
+
+	assert(messageId, "No message ID found.")
+
+	local client = msg.client
+
+	local channel
+	if channelId then
+		channel = assert(client:getChannel(channelId), 'unknown channel: ' .. channelId)
+	else
+		channel = msg.channel
+	end
+
+	local message = assert(channel:getMessage(messageId), 'unknown message: ' .. messageId)
+	-- assert(#message.content > 0, 'no message content in message: ' .. messageId)
+
+	local guild = assert(channel.guild, 'must be a guild channel')
+
+	local bot = assert(guild:getMember(client.user))
+	assert(bot:hasPermission(channel, 'readMessages'), 'missing read permission')
+	assert(bot:hasPermission(channel, 'readMessageHistory'), 'missing read permission')
+
+	local viewer = assert(guild:getMember(msg.author))
+	assert(viewer:hasPermission(channel, 'readMessages'), 'missing read permission')
+	assert(viewer:hasPermission(channel, 'readMessageHistory'), 'missing read permission')
+
+	return message, channel, guild
+
+end
+
 return {
 	levenshtein = levenshtein,
 	markdown = markdown,
@@ -341,4 +441,7 @@ return {
 	printLine = printLine,
 	prettyLine = prettyLine,
 	convert = convert,
+	getCreatedJoinedCharts = getCreatedJoinedCharts,
+	getCreatedJoinedMembers = getCreatedJoinedMembers,
+	findMessage = findMessage,
 }

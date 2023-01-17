@@ -13,7 +13,7 @@ return function(client)
 	if me:hasPermission('manageNicknames') then
 		local position = me.highestRole.position
 		for member in guild.members:findAll(function(m)
-			return m.name:startswith('!') and m.highestRole.position < position and m.status ~= 'offline'
+			return m.name:find('^!') and m.highestRole.position < position and m.status ~= 'offline'
 		end) do
 			member:setNickname('💩')
 			timer.sleep(1000)
