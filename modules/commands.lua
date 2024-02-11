@@ -24,7 +24,7 @@ local helpers = assert(loader.load('_helpers'))
 
 local prefix = '~~'
 local function parseContent(content)
-	if content:find(prefix, 1, true) ~= 1 then return end
+	if content:find(prefix, 1, true) == 1 and content:find(prefix, 3, true) == nil then return end
 	content = content:sub(prefix:len() + 1)
 	local cmd, arg = content:match('(%S+)%s+(.*)')
 	return cmd or content, arg
