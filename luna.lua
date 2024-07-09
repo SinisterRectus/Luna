@@ -49,6 +49,10 @@ client:on('messageCreate', function(msg)
 		modules.antispam(msg)
 	end
 
+	if modules.number then
+		modules.number(msg)
+	end
+
 end)
 
 client:on('messageDelete', function(msg)
