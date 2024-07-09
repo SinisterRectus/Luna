@@ -9,6 +9,7 @@ local f, upper, format = string.format, string.upper, string.format
 local insert, concat, sort, pack = table.insert, table.concat, table.sort, table.pack
 local clamp = ext.math.clamp
 local pad = ext.string.pad
+local round = ext.math.round
 
 local Date = discordia.Date
 
@@ -361,6 +362,30 @@ cmds['boosters'] = {function(_, msg)
 
 end, 'Shows all current guild boosters.'}
 
+cmds['mods'] = {function(_, msg)
+
+	local guild = msg.guild
+	local n = bit.lshift(1, 18)
+
+	local members = {}
+	for member in guild.members:findAll(function(m)
+		return bit.band(m.user._public_flags or 0, n) == n
+	end) do
+		insert(members, {member.joinedAt, member.tag})
+	end
+	sort(members, function(a, b) return a[1] < b[1] end)
+
+	local desc = {}
+	for i, v in ipairs(members) do
+		insert(desc, f('%i. %s', i, v[2]))
+	end
+
+	return {
+		content = concat(desc, '\n'),
+	}
+
+end, 'Shows all current guild certified moderators.'}
+
 cmds['lenny'] = {function()
 	return '( ͡° ͜ʖ ͡°)'
 end, '( ͡° ͜ʖ ͡°)'}
@@ -647,7 +672,7 @@ cmds['steal'] = {function(arg, msg)
 				local filename = f('temp.%s', ext)
 				fs.writeFileSync(filename, data) -- hack for now
 				emoji = assert(guild:createEmoji(emoji[1], filename))
-					return f("Emoji %s stolen!", emoji.mentionString)
+				return f("Emoji %s stolen!", emoji.mentionString)
 			end
 		end
 	end
@@ -906,7 +931,7 @@ cmds['convert'] = {function(arg, msg)
 
 	if arg and arg:find(pattern) then
 		for d, u in arg:gmatch(pattern) do
-		helpers.convert(fields, d, u)
+			helpers.convert(fields, d, u)
 		end
 	else
 		local bot = msg.client.user
@@ -1003,6 +1028,58 @@ end, 'Shows your creation and joined at positions.'}
 cmds['snowflake'] = {function(arg)
 	return tonumber(arg) and Date.fromSnowflake(arg):toISO(' ', '') or "No integer found"
 end, 'Displays the date for a given snowflake ID.'}
+
+cmds['pomelo'] = {function(arg, msg)
+
+	local guild = msg.guild
+
+	local tbl = {}
+	local dates = {}
+	local n, m = 0, 0
+
+	if tonumber(arg) then
+
+		tbl[0] = {'Month', 'New', 'Members', '%'}
+
+		for member in guild.members:findAll(function(member) return member.timestamp:sub(1, 4) == arg end) do
+			m = m + 1
+			local d = member.timestamp:sub(6, 7)
+			dates[d] = dates[d] or {0, 0}
+			if member.discriminator == '0' then
+				n = n + 1
+				dates[d][1] = dates[d][1] + 1
+			end
+			dates[d][2] = dates[d][2] + 1
+		end
+
+	else
+
+		tbl[0] = {'Year', 'New', 'Members', '%'}
+
+		for member in guild.members:iter() do
+			m = m + 1
+			local d = member.timestamp:sub(1, 4)
+			dates[d] = dates[d] or {0, 0}
+			if member.discriminator == '0' then
+				n = n + 1
+				dates[d][1] = dates[d][1] + 1
+			end
+			dates[d][2] = dates[d][2] + 1
+		end
+
+	end
+
+	for k, v in pairs(dates) do
+		insert(tbl, {k, v[1], v[2], round(100 * v[1]/v[2], 2)})
+	end
+
+	sort(tbl, function(a, b) return a[1] < b[1] end)
+	insert(tbl, {'Total', n, m, round(100 * n/m, 2)})
+
+	return helpers.markdown(tbl)
+
+
+end, 'Returns username roll-out stats for the current'}
 
 return {
 	onMessageCreate = onMessageCreate,

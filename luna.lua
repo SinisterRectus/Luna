@@ -13,7 +13,10 @@ local client = discordia.Client {
 	cacheAllMembers = true,
 }
 
+local e = discordia.enums.gatewayIntent
 client:enableAllIntents()
+client:disableIntents(e.guildMessageTyping)
+client:disableIntents(e.directMessageTyping)
 
 local clock = discordia.Clock()
 
