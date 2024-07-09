@@ -174,6 +174,10 @@ cmds['icon'] = {function(_, msg)
 	return {embed = {image = {url = msg.guild.iconURL}}}
 end, 'Provides the guild icon.'}
 
+cmds['wiki'] = {function(arg, msg)
+	return {content = "https://github.com/SinisterRectus/Discordia/wiki/" .. (arg or "")}
+end, 'Provides the Discordia Wiki page for the given object/class.'}
+
 cmds['serverinfo'] = {function(_, msg)
 
 	local guild = msg.guild
